@@ -211,13 +211,7 @@ class PlumeModel:
 
         with warnings.catch_warnings(record = True) as w:  # catch divide by zero warning
             for i in range(self.T.shape[0]):
-                z = calc_geopotential_height(self.T[i, self.ind_surface[i]:], self.q[i, self.ind_surface[i]:], 
-                                                self.lev[self.ind_surface[i]:], vertical_axis = -1)
-                # Deltaz = np.diff(z)
-                # print(Deltaz.shape, z.shape)
-                # print(f'Deltaz: {Deltaz.}')
-                # self.c_mix_DIB[i, self.ind_surface[i]:] = Deltaz/z
-                # self.c_mix_DIB[np.isinf(self.c_mix_DIB)] = 1.0  # since c_mix is a fraction, it cannot exceed 1.
+
                 arg = np.pi * 0.5 * (self.lev[self.ind_surface[i] - 1] - self.lev) / (self.lev[self.ind_surface[i] - 1] - self.lev[iz_upper])
                 w_mean[i, :] = np.sin(arg)    
                 self.c_mix_DIB[i, 1:-1]= (w_mean[i, 2:] - w_mean[i, :-2])/(w_mean[i, 2:] + w_mean[i, :-2])
