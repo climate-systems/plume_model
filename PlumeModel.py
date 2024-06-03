@@ -211,6 +211,12 @@ class PlumeModel:
 
         with warnings.catch_warnings(record = True) as w:  # catch divide by zero warning
             for i in range(self.T.shape[0]):
+
+                ## Compute Deep Inflow Mass-Flux 
+                ## The mass-flux (= vertical velocity) is a sine wave from near surface
+                ## to iz_upper. Designed to be 1 at the level of launch
+                ## and 0 above max. w i.e., no mixing in the upper trop.
+
                 arg = np.pi * 0.5 * (self.lev[self.ind_surface[i] - 1] - self.lev) / (self.lev[self.ind_surface[i] - 1] - self.lev[iz_upper])
                 w_mean[i, :] = np.sin(arg)    
                 self.c_mix_DIB[i, 1:-1]= (w_mean[i, 2:] - w_mean[i, :-2])/(w_mean[i, 2:] + w_mean[i, :-2])
@@ -220,15 +226,6 @@ class PlumeModel:
         self.c_mix_DIB[np.isinf(self.c_mix_DIB)] = 0.0
 
         assert (np.ma.masked_invalid(self.c_mix_DIB)>=0).all() & (np.ma.masked_invalid(self.c_mix_DIB)<=1).all(), 'Mixing coeffs. must be between 0 and 1'
-
-        ## Compute Deep Inflow Mass-Flux 
-        ## The mass-flux (= vertical velocity) is a sine wave from near surface
-        ## to 450 mb. Designed to be 1 at the level of launch
-        ## and 0 above max. w i.e., no mixing in the upper trop.
-        # w_mean = np.sin(np.pi * 0.5 * (self.lev[self.ind_surface - 1] - self.lev)/(self.lev[self.ind_surface - 1] - self.lev[iz_upper]))    
-        # self.c_mix_DIB[1:-1]= (w_mean[2:] - w_mean[:-2])/(w_mean[2:] + w_mean[:-2])
-        # self.c_mix_DIB[self.c_mix_DIB<0] = 0.0
-        # self.c_mix_DIB[np.isinf(self.c_mix_DIB)] = 0.0
 
     def run_plume(self, mix):
 
