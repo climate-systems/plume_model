@@ -181,7 +181,7 @@ cdef theta_il_calc_BF04(double press_hPa, double temp, double q, double ql, doub
     return theta_il
 
 
-cdef theta_il_calc(double press_hPa,double temp,double q,double ql,double qi):
+cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi):
 
     cdef double pref = 100000.
     cdef double tmelt  = 273.15
@@ -286,51 +286,54 @@ cdef theta_l_calc(double press_hPa, double temp,double q,double ql):
     theta_l = temp * pow((pref / press),chi) * pow((1. - (rl/(EPS + rt))),chi)*pow((1. - (rl/rt)),(-gam))*exp((-ALV)*rl/((CPD+(rt*CPV))*temp))
     return theta_l
 
-cdef temp_calc(double press_hPa,double theta_l,double qt):
+cdef temp_calc(double press_hPa, double theta_l, double qt):
 
     ## Only designed to work on single elements for now ##
     ## get some constants ##
     cdef double pref = 100000.
     cdef double tmelt  = 273.15
-    cdef double CPD=1005.7
-    cdef double CPVMCL=2320.0
-    cdef double RV=461.5
-    cdef double RD=287.04
-    cdef double EPS=RD/RV
-    cdef double ALV0=2.501E6
+    cdef double CPD = 1005.7
+    cdef double CPVMCL = 2320.0
+    cdef double RV = 461.5
+    cdef double RD = 287.04
+    cdef double EPS = RD/RV
+    cdef double ALV0 = 2.501E6
     cdef double pres, rs, rl, theta_l_new, temp
-    cdef double rt, TL, qs, ql,q,x1, diff_tl
-    cdef double deltaT=999.0
+    cdef double rt, TL, qs, ql, q, diff_tl
+    cdef double LvRvT_sqr, Lv_CpT
+    cdef double deltaT = 999.0
 
     press = press_hPa * 100. 
     rt = qt / (1. - qt)
 
-#     #get TL, tentative T, rs, ql
-    TL = theta_l * pow((press / pref),(RD/CPD))
-    qs=qs_calc(press_hPa, TL)
+    #get TL, tentative T, rs, ql
+    TL = theta_l * pow((press / pref), (RD/CPD))
+    qs = qs_calc(press_hPa, TL)
 
-    if qt>qs:
-        ql=qt-qs
+    if qt > qs:
+        ql = qt-qs
     else:
-        ql=0
+        ql = 0
         
     rs = qs / (1. - qs - ql)
     
-    if rt>rs:
-        rl=rt-rs
+    if rt > rs:
+        rl = rt-rs
     else:
-        rl=0
+        rl = 0
 
     temp = TL
     
-#     ## Iterative procedure to get T
+    # Iterative procedure to get T
 
     while (abs(deltaT) >= 1e-3):
-        ALV= ALV0
-        x1=ALV/(CPD*temp)
-        deltaT = (temp - TL*(1.+x1*rl))/(1. + x1*TL*(rl/temp+(1.+rs*EPS)*rs*ALV/(RV*temp*temp)))
-        temp = temp -deltaT
-        qs=qs_calc(press_hPa, temp)
+        
+        ALV = ALV0
+        Lv_CpT = ALV/(CPD * temp)
+        LvRvT_sqr = ALV/(RV * pow(temp,2))
+        deltaT = (temp - TL * (1. + Lv_CpT * rl))/(1. + Lv_CpT * TL * (rl/temp + (1. + rs*EPS) * rs * LvRvT_sqr))
+        temp = temp - deltaT
+        qs = qs_calc(press_hPa, temp)
         
         if qt>qs:
             ql = qt - qs  
@@ -352,7 +355,7 @@ cdef temp_calc(double press_hPa,double theta_l,double qt):
 #     ##do additional iteration to make sure final theta_l
 #     ##agrees with the initial theta_l
 
-    theta_l_new=theta_l_calc(press_hPa,temp, q,ql)
+    theta_l_new = theta_l_calc(press_hPa,temp, q,ql)
     diff_tl = theta_l_new - theta_l
 
     while(abs(diff_tl) > 0.05):
@@ -361,8 +364,8 @@ cdef temp_calc(double press_hPa,double theta_l,double qt):
         else:
             deltaT = diff_tl/3.
 
-        temp=temp-deltaT
-        qs=qs_calc(press_hPa, temp)
+        temp = temp-deltaT
+        qs = qs_calc(press_hPa, temp)
         
         if qt>qs:
             ql=qt-qs
@@ -374,7 +377,7 @@ cdef temp_calc(double press_hPa,double theta_l,double qt):
         else:
             q=qs
 
-        theta_l_new=theta_l_calc(press_hPa,temp, q,ql)
+        theta_l_new = theta_l_calc(press_hPa,temp, q,ql)
         diff_tl = theta_l_new - theta_l
         
     return temp
@@ -473,14 +476,96 @@ cdef temp_i_calc(double press_hPa, double theta_il, double qt):
     
     return temp
 
+# Take temp, total water and return ice-liquid-vapor partition
+# microphysics1: no supersaturation allowed. All condensed water is in the form of liquid above 0C and ice below 0C 
+
+cdef microphysics1(double press_hPa, double temp_plume, double qt, double rain_out_thresh):
+    cdef double tmelt = 273.15
+    cdef double qsw, qsi
+    cdef double q_plume, ql_plume, qi_plume, q_rain
+
+    if temp_plume > tmelt:
+        qsw = qs_calc(press_hPa, temp_plume) # get saturation sp. humidity wrt water
+        
+        if qt < qsw:
+            q_plume = qt
+        else:
+            q_plume = qsw                               
+            ql_plume = qt - q_plume  # plume liq. water
+
+            if ql_plume > rain_out_thresh: # Top out the liquid water content at rain_out value
+                q_rain = qt - q_plume - rain_out_thresh
+                ql_plume = rain_out_thresh
+
+        return q_plume, ql_plume, 0.0, q_rain
+
+    elif temp_plume <= tmelt:
+        qsi = qsi_calc(press_hPa, temp_plume)
+
+        if qt < qsi:
+            q_plume = qt
+        else:
+            q_plume = qsi
+            qi_plume = qt - q_plume
+
+            if qi_plume > rain_out_thresh:   # Top out the ice content at rain_out value
+                q_rain = qt - q_plume - rain_out_thresh
+                qi_plume = rain_out_thresh
+
+        return q_plume, 0.0, qi_plume, q_rain
+
+cdef freeze_all_liquid(double press_hPa, double temp, double qt):
+    
+    # convert liquid water to ice in one (irreversible) step (Eman. 1994, p. 139):
+    cdef double LF0 = 0.3337E6
+    cdef double LV0 = 2.501E6
+    cdef double RV = 461.5
+    cdef double CPD = 1005.7
+    cdef double CL = 4190.0
+    cdef double alpha, bet, b1, b2
+    cdef double qs_fr, q_fr, ql_fr , q2_fr, qi_fr, qsi_fr
+    cdef double rl_fr, rs_fr, rt_fr
+    cdef double a_fr, b_fr, c_fr, deltaTplus
+    cdef double qsw
+
+    qsw = qs_calc(press_hPa, temp)  # get saturation sp. humidity wrt water 
+    
+    if qt < qsw:  # if plume is unsaturated wrt liquid water
+        q_fr = qt  
+    else:
+        q_fr = qsw
+    
+    ql_fr = qt - q_fr   # get total water that must be frozen
+
+    # compute mixing ratios
+    rl_fr = ql_fr/(1. - q_fr - ql_fr) 
+    rs_fr = qsw/(1. - qsw)
+    rt_fr = rl_fr + rs_fr
+
+    alpha = 0.009705  ## linearized e#/e* around 0C (to -1C)
+    b1 = esi_calc(temp)  # saturation vapor pressure over ice
+    b2 = es_calc(temp)   # saturation vapor pressure over water
+    bet = b1 / b2
+
+    a_fr = (LV0 + LF0) * alpha * LV0 * rs_fr / (RV * pow(temp, 2))
+    b_fr = CPD + (CL * rt_fr) + (alpha * (LV0 + LF0) * rs_fr) +(bet * (LV0 + LF0) * LV0 * rs_fr /(RV * pow(temp, 2)))
+    c_fr = ((-1.) * LV0 * rs_fr) - (LF0 * rt_fr) + (bet * (LV0 + LF0) * rs_fr)
+    deltaTplus = (-b_fr + sqrt(pow(b_fr,2) - (4 * a_fr * c_fr))) / (2 * a_fr)
+    return temp + deltaTplus
+
 
 def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
 np.ndarray[DTYPE_t, ndim=2] q_env,
 np.ndarray[DTYPE_t, ndim=2] temp_v_plume,
 np.ndarray[DTYPE_t, ndim=2] temp_plume,
+np.ndarray[DTYPE_t, ndim=2] q_plume,
+np.ndarray[DTYPE_t, ndim=2] ql_plume,
+np.ndarray[DTYPE_t, ndim=2] qi_plume,
+np.ndarray[DTYPE_t, ndim=2] q_rain,
 np.ndarray[DTYPE_t, ndim=2] c_mix,
 np.ndarray[DTYPE1_t, ndim=1] pres, 
-np.ndarray[DTYPE1_t, ndim=1] ind_init):
+np.ndarray[DTYPE1_t, ndim=1] ind_init,
+double rain_out):  
 
     ### Only input is environmental T,q and lifting level -- Everything else computed in-house ##
 
@@ -492,27 +577,22 @@ np.ndarray[DTYPE1_t, ndim=1] ind_init):
     cdef np.ndarray[DTYPE_t, ndim=1] theta_il_plume= np.zeros(height_size)
     cdef np.ndarray[DTYPE_t, ndim=1] qt_plume= np.zeros(height_size)
 
-    cdef double q_plume
-    cdef double ql_plume
-    cdef double theta_v_plume
-    cdef double theta_e_plume
-    cdef double NAN
-    NAN = float("NaN")
+    # cdef double theta_v_plume
+    # cdef double theta_e_plume
+    # cdef double NAN
+    # NAN = float("NaN")
 
-    cdef double qi_plume, qs_plume
-    cdef double alpha, bet, b1, b2, LV0, LF0
-    cdef double qs_fr, q_fr, ql_fr , q2_fr, qi_fr, qsi_fr
-    cdef double rl_fr, rs_fr, rt_fr
-    cdef double a_fr, b_fr, c_fr,deltaTplus
-    cdef double q1, ql1, qs1
-    cdef double x
+    # cdef double qs_plume
+    cdef double q1, ql1, qsw, qsi
+    cdef double qp, qlp, qip, q_rainp
+    # cdef double x
     
     cdef Py_ssize_t i,j 
     
-    cdef double tmelt  = 273.15
-    cdef double CPD=1005.7
-    cdef double CL=4190.0
-    cdef double RV=461.5
+    cdef double tmelt = 273.15
+    cdef double CPD = 1005.7
+    cdef double CL = 4190.0
+    cdef double RV = 461.5
         
     for j in range(time_size):
         for i in range(0, height_size):  
@@ -527,8 +607,7 @@ np.ndarray[DTYPE1_t, ndim=1] ind_init):
         freeze = 0
         
         for i in range(ind_init[j] + 1, height_size):
-
-            ## Mix the liquid water potential temperature and the total water ##
+            ## Mix the ice-liquid potential temperature and the total water ##
             if c_mix[j,i-1]>0:
                 theta_il_plume[i] = theta_il_plume[i-1] * (1. - c_mix[j,i-1]) + theta_il_env[i-1] * c_mix[j,i-1]
                 qt_plume[i] = (qt_plume[i-1] * (1.-c_mix[j,i-1])) + (q_env[j,i-1] * c_mix[j,i-1])
@@ -537,111 +616,29 @@ np.ndarray[DTYPE1_t, ndim=1] ind_init):
                 qt_plume[i] = qt_plume[i-1]
             
             if (isfinite(theta_il_plume[i]) & isfinite(qt_plume[i])):
+                print(i)
+                if freeze == 0:
+                    temp_plume[j,i] = temp_calc(pres[i], theta_il_plume[i], qt_plume[i])
 
-                if (freeze==0):
+                    if temp_plume[j,i] > tmelt: # check if above freezing
+                        q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i] =  microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out)
+                        theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], 0.)
+                        temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i], ql_plume[j,i])
 
-                    temp_plume[j,i]=temp_calc(pres[i], theta_il_plume[i], qt_plume[i])
-                    
-                    if (temp_plume[j,i]<=tmelt):
-                        ## Turning off freezing ##
-                        # convert liquid water to ice in one (irreversible) step (Eman. 1994, p. 139):
-                        LF0 = 0.3337E6
-                        LV0 = 2.501E6
-                        qs_fr=qs_calc(pres[i], temp_plume[j,i])
-                        
-                        if qt_plume[i] < qs_fr:
-                            q_fr=qt_plume[i]
-                        else:
-                            q_fr=qs_fr
-                        
-                        ql_fr = qt_plume[i] - q_fr
-                        rl_fr = ql_fr/(1. - (q_fr ) - (ql_fr ))
-                        rs_fr = qs_fr/(1. - (qs_fr))
-                        rt_fr = rl_fr + rs_fr
-                        alpha = 0.009705  ## linearized e#/e* around 0C (to -1C)
-                        b1=esi_calc(temp_plume[j,i])
-                        b2=es_calc(temp_plume[j,i])
-                        bet = b1 / b2
-                        a_fr = (LV0 + LF0) * alpha * LV0 * rs_fr / (RV *pow(temp_plume[j,i],2))
-                        b_fr = CPD + (CL * rt_fr) + (alpha * (LV0 + LF0) * rs_fr) +(bet * (LV0 + LF0) * LV0 * rs_fr /(RV *pow(temp_plume[j,i],2)))
-                        c_fr = ((-1.) * LV0 * rs_fr) - (LF0 * rt_fr) + (bet * (LV0 + LF0) * rs_fr)
-                        deltaTplus = (-b_fr + sqrt(pow(b_fr,2) - (4 * a_fr * c_fr))) / (2 * a_fr)
-                        temp_plume[j,i] = temp_plume[j,i] + deltaTplus
-                        
-                        qsi_fr=qsi_calc(pres[i], temp_plume[j,i])
-                        qs_plume = qsi_fr
-                        
-                        if qt_plume[i]<qsi_fr:
-                            q_plume = qt_plume[i]  
-                        else:
-                            q_plume=qsi_fr
-                            
-                        q2_fr = q_plume
-                        qi_fr = qt_plume[i] - q2_fr
-                        qi_plume = qi_fr
-                        theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q2_fr, 0., qi_fr)
-                        temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q2_fr, qi_fr)
+                    elif temp_plume[j,i] <= tmelt: # check if below freezing
+                        temp_plume[j,i] = freeze_all_liquid(pres[i], temp_plume[j,i], qt_plume[i])                                                
+                        q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i] = microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out)
+                        theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], 0., qi_plume[j,i])
+                        temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i], qi_plume[j,i])
                         freeze = 1
 
-
-                    else:
-
-                        ## calc. other values with liquid, as usual
-                        qs1 = qs_calc(pres[i], temp_plume[j,i])
-                        qs_plume = qs1
-                        
-                        if qt_plume[i]<qs1:
-                            q_plume=qt_plume[i]
-                        else:
-                            q_plume=qs1
-                               
-                        q1 = q_plume
-                        ql1 = qt_plume[i] - q1
-                        ql_plume = ql1
-                        
-                        if ql1>.001:   # Top out the liquid water content at 1g/kg
-
-                            qt_plume[i]=qt_plume[i]-ql1+.001
-                            theta_il_plume[i]=theta_il_calc(pres[i], temp_plume[j,i], q1, 0.001, 0.)
-                            ql1=.001
-
-                        temp_v_plume[j,i]=temp_v_calc(temp_plume[j,i], q1, ql1)
-
-                        #!!!!!!!!! RAINING OUT LIQUID WATER !!!!!!!!#                            
-#                         if ql1>0:
-#                             qt_plume[i]=qt_plume[i]-ql1
-#                             theta_il_plume[i]=theta_il_calc(pres[i], temp_plume[j,i], q1, 0., 0.)
-                        #!!!!!!!!! REMOVING WATER LOADING IN TEMP_V COMPUTATION !!!!!!!!#                            
-#                         temp_v_plume[j,i]=temp_v_calc(temp_plume[j,i], q1, 0.0)
-                        #!!!!!!!!! REMOVING WATER LOADING IN TEMP_V COMPUTATION !!!!!!!!# 
-
-                    
-
-                else:
-                
-                    #continue adiabatic ascent with all additional condensation as ice
-                    temp_plume[j,i]=temp_i_calc(pres[i], theta_il_plume[i], qt_plume[i])
-                    
-                    ##calc. other values
-                    qsi_fr=qsi_calc(pres[i], temp_plume[j,i])
-                    qs_plume = qsi_fr
-                
-                    if qt_plume[i]<qsi_fr:
-                        q_plume = qt_plume[i] 
-                    else:
-                        q_plume=qsi_fr
-                
-                    q2_fr = q_plume
-                    qi_fr = qt_plume[i] - q2_fr
-                    qi_plume = qi_fr
-                    
-                    if qi_fr>.001:   # Top out the ice content at 1g/kg
-
-                        qt_plume[i]=qt_plume[i]-qi_fr+.001
-                        theta_il_plume[i]=theta_il_calc(pres[i], temp_plume[j,i], q2_fr, 0.0, 0.001)
-                        qi_fr=.001
-                                        
-                    temp_v_plume[j,i]=temp_v_calc(temp_plume[j,i], q2_fr, qi_fr)
+                elif freeze == 1:  # if frozen condensate is present
+                    # continue adiabatic ascent with all additional condensation as ice
+                    temp_plume[j,i] = temp_i_calc(pres[i], theta_il_plume[i], qt_plume[i])
+                    q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i] = microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out)
+                    theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], 0.0, qi_plume[j,i])                                        
+                    temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i] , qi_plume[j,i])
+        
 
 def invert_theta_il(np.ndarray[DTYPE_t, ndim=2] theta_il_plume,
 np.ndarray[DTYPE_t, ndim=2] qt_il_plume,
@@ -657,7 +654,7 @@ np.ndarray[DTYPE1_t, ndim=1] pres):
     for j in range(time_size):
         for i in range(0,height_size): 
             if (theta_il_plume[j,i]>0):
-                temp_plume[j,i]=temp_calc(pres[i], theta_il_plume[j,i], qt_il_plume[j,i])
+                temp_plume[j,i] = temp_calc(pres[i], theta_il_plume[j,i], qt_il_plume[j,i])
 
                     
 def calc_qsat(np.ndarray[DTYPE_t, ndim=2] temp_env,

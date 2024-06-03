@@ -103,7 +103,8 @@ class PlumeModel:
                  interpolate = True,
                  launch_opt = 'surface', # launch from surface or specify pressure level 
                  launch_level = 1000,
-                 DIB_mix_upper = 450) -> None:
+                 DIB_mix_upper = 450, 
+                 rain_out = 1e-3) -> None:
         
         if launch_opt not in ['surface', 'specified']:
             raise ValueError('launch_opt must be either surface or specified')
@@ -117,6 +118,7 @@ class PlumeModel:
         self.temp_v_plume = None
         self.temp_plume = None
         self.mix_opt = mix_opt
+        self.rain_out = rain_out  # rain out hydrometeors above this value
         self.interpolate = interpolate
         self.output_file_name = Path(output_dir) / output_file_name
 
@@ -201,10 +203,7 @@ class PlumeModel:
         Prescribing DIB mixing coefficients
         """
         iz_upper = np.argmin(abs(self.lev - self.DIB_mix_upper))
-        # lev = self.lev
-        # ind_launch = self.ind_launch
 
-        # 1/z mixing profile
         assert(all(self.ind_surface >= 0))
         self.c_mix_DIB[:] = np.nan
         w_mean = np.zeros_like(self.c_mix_DIB)
@@ -231,6 +230,8 @@ class PlumeModel:
 
         # Set output variables 
         self.temp_plume, self.temp_v_plume = np.zeros_like(self.T), np.zeros_like(self.T)
+        self.q_plume, self.ql_plume, self.qi_plume = np.zeros_like(self.T), np.zeros_like(self.T), np.zeros_like(self.T)
+        self.q_rain = np.zeros_like(self.T)  # raining hydrometeors
 
         if mix == 'DIB':
             mixing_coefs = self.c_mix_DIB
@@ -240,7 +241,9 @@ class PlumeModel:
         # Run entraining plume model
         print(f'RUNNING {mix} PLUME COMPUTATION')
         plume_lifting(self.T, self.q, self.temp_v_plume, self.temp_plume, 
-        mixing_coefs, self.lev, self.ind_launch)
+                      self.q_plume, self.ql_plume, self.qi_plume, self.q_rain,
+                      mixing_coefs, self.lev, self.ind_launch, self.rain_out)
+        
         self.mix_opt = mix
 
     def postprocess_save(self):
@@ -262,12 +265,18 @@ class PlumeModel:
         zero_idx = np.where(self.temp_plume == 0)  # levels where plume is not active      
         T_env[zero_idx] = np.nan
         Tv_env[zero_idx] = np.nan
-        self.temp_plume[zero_idx] = np.nan
         self.temp_v_plume[zero_idx] = np.nan
+        self.temp_plume[zero_idx] = np.nan
+
+        nan_idx = np.where(np.isnan(self.temp_plume))
+        self.q_plume[nan_idx] = np.nan
+        self.ql_plume[nan_idx] = np.nan
+        self.qi_plume[nan_idx] = np.nan
+        self.q_rain[nan_idx] = np.nan
 
         thetae_env = theta_e_calc(self.lev, self.T, self.q)
         thetae_sat_env = theta_e_calc(self.lev, self.T, qsat_env)
-        # thetae_plume = theta_e_calc(self.lev, self.temp_plume, self.q)
+        thetae_plume = theta_e_calc(self.lev, self.temp_plume, self.q_plume)
 
         # thetae_plume[nan_idx] = np.nan
 
@@ -279,7 +288,11 @@ class PlumeModel:
                          Tv_env = (("time", "lev"), Tv_env),
                          thetae_env = (("time", "lev"), thetae_env),
                          thetae_sat_env = (("time", "lev"), thetae_sat_env),
-                        #  thetae_plume = (("time", "lev"), thetae_plume),
+                         thetae_plume = (("time", "lev"), thetae_plume),
+                         q_plume = (("time", "lev"), self.q_plume),
+                         ql_plume = (("time", "lev"), self.ql_plume),
+                         qi_plume = (("time", "lev"), self.qi_plume),
+                         q_rain = (("time", "lev"), self.q_rain)    
                          )
         coords = dict(time = self.time, lev = self.lev)
 
