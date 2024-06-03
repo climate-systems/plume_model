@@ -1,4 +1,6 @@
 import numpy as np
+from scipy.integrate import cumulative_trapezoid
+import xarray as xr
 
 #### Thermodyanmic constants ###
 pref = 100000.
@@ -16,6 +18,36 @@ RD=287.04
 EPS=RD/RV
 ALV0=2.501e6
 
+
+def calc_pres_from_height(height, T, ps):
+
+    """
+    Calculate pressure in hPa from height in m
+    assuming hydrostatic balance and neglecting 
+    virtual temperature effects
+    """
+
+    Rd = 287.05
+    g = 9.81
+    exponent =  -g * cumulative_trapezoid(y = 1/(Rd * T), x = height, initial = 0, axis = -1) 
+    exponent = xr.DataArray(exponent, dims = ["time", "height"], 
+             coords = {"time": T.time, "height": T.height})
+    return ps * np.exp(exponent)
+
+
+def calc_geopotential_height(temp, sphum, press_hPa, vertical_axis = -1):
+
+    """
+    Calculate geopotential height from temperature, specific humidity, and pressure.
+    Assumes that axis = -1 is the vertical axis.
+    """
+    Rd = 287.04
+    g = 9.81
+    Tv = temp_v_calc(temp, sphum, 0.0)
+    z = -(Rd/g) * cumulative_trapezoid(y = Tv, x = np.log(press_hPa), axis = vertical_axis, 
+                                       initial = 0)
+    return z
+    
 
 def temp_v_calc (temp, q, ql):
 
@@ -253,6 +285,7 @@ def theta_calc(press_hPa, temp):
 
     #calc. theta_l
     theta = temp * (pref/press)**(RD/CPD)
+
 
 
 def temp_calc(press_hPa,theta_l,qt):

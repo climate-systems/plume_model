@@ -130,6 +130,57 @@ cdef theta_v_calc(double press_hPa, double temp,double q,double ql):
     theta_v = temp_v * pow((pref/press),(RD/CPD))
     return theta_v
 
+cdef theta_il_calc_BF04(double press_hPa, double temp, double q, double ql, double qi):
+
+    """
+    Using the defintion of thetae_il given in eq. (25) 
+    of Bryan and Fritsch 2004, MWR
+    """
+
+    cdef double pref = 100000.
+    cdef double tmelt  = 273.15
+    cdef double CPD=1005.7
+    cdef double CPV=1870.0
+    cdef double CPVMCL=2320.0
+    cdef double RV=461.5
+    cdef double RD=287.04
+    cdef double EPS=RD/RV
+    cdef double ALV0=2.501E6
+    cdef double LS=2.834E6
+    cdef double press,tempc
+    cdef double r, rl, ri, rt
+    cdef double ALV, chi, gam
+    cdef double theta_il, Hl, Hi, e
+    cdef double exponent, CPDV
+
+    press = press_hPa * 100. 
+    tempc = temp - tmelt 
+
+    r = q / (1. - q - ql - qi)
+    rl =  ql / (1. - q - ql - qi)
+    ri =  qi / (1. - q - ql - qi)
+    rt = r + rl + ri
+
+    ALV = ALV0 - (CPVMCL * tempc)
+
+    CPDV = CPD + rt * CPV
+
+    chi = (RD + rt * RV) / CPDV
+    gam = (rt * RV) / CPDV
+
+    # saturation vapor pressures
+    e = r * press /(EPS + r)
+    Hl = e/es_calc(temp)
+    Hi = e/esi_calc(temp)
+
+    exponent = (-ALV*rl - LS*ri)/(CPDV * temp)\
+     + (RV/CPDV) * (rl * log(Hl) +  ri * log(Hi))
+
+    theta_il = temp * pow((pref / press),chi) * pow(1. - (rl + ri)/(EPS + rt), chi) * pow(1. - (rl + ri)/rt, -gam) * exp(exponent)
+
+    return theta_il
+
+
 cdef theta_il_calc(double press_hPa,double temp,double q,double ql,double qi):
 
     cdef double pref = 100000.
@@ -163,9 +214,9 @@ cdef theta_il_calc(double press_hPa,double temp,double q,double ql,double qi):
     ### Handling zero moisture environments
 
     if q==0:
-        theta_il = temp * pow((pref / press),chi) * pow((1. - ((rl + ri)/(EPS + rt))),chi)*exp(((-ALV)*rl - LS*ri)/(CPD+(rt*CPV))/temp)
+        theta_il = temp * pow((pref / press),chi) * pow((1. - ((rl + ri)/(EPS + rt))),chi) * exp(((-ALV)*rl - LS*ri)/(CPD+(rt*CPV))/temp)
     else:
-        theta_il = temp * pow((pref / press),chi) * pow((1. - ((rl + ri)/(EPS + rt))),chi)*pow((1. - ((rl + ri)/rt)),-gam)*exp(((-ALV)*rl - LS*ri)/(CPD+(rt*CPV))/temp)
+        theta_il = temp * pow((pref / press),chi) * pow((1. - ((rl + ri)/(EPS + rt))),chi) * pow((1. - ((rl + ri)/rt)),-gam) * exp(((-ALV)*rl - LS*ri)/(CPD+(rt*CPV))/temp)
 
 
     return theta_il
@@ -200,15 +251,6 @@ cdef theta_e_calc (double press_hPa,double temp, double q):
 
     theta_e = temp * pow((pref / press),chi_e) * exp(((3.376/TL) - 0.00254) * r * 1000. * (1. + (0.81 * r)))
     return theta_e
-
-# cdef theta_calc(double press_hPa, double temp, double theta):
-#     cdef double pref = 100000.
-#     cdef double CPD=1005.7
-#     cdef double RD=287.04
-#     cdef double press
-#     press = press_hPa * 100. 
-# 
-#     theta = temp * pow((pref/press),(RD/CPD))
 
 cdef theta_l_calc(double press_hPa, double temp,double q,double ql):
     cdef double pref = 100000.
@@ -336,6 +378,9 @@ cdef temp_calc(double press_hPa,double theta_l,double qt):
         diff_tl = theta_l_new - theta_l
         
     return temp
+
+
+
 
 cdef temp_i_calc(double press_hPa, double theta_il, double qt):
 #     ## Get temperature from theta_il and all condensed matter in qt is ice ##
@@ -466,37 +511,35 @@ np.ndarray[DTYPE1_t, ndim=1] ind_init):
     
     cdef double tmelt  = 273.15
     cdef double CPD=1005.7
-    cdef double  CL=4190.0
+    cdef double CL=4190.0
     cdef double RV=461.5
         
-        
     for j in range(time_size):
+        for i in range(0, height_size):  
+            theta_il_env[i] = theta_il_calc(pres[i], temp_env[j,i], q_env[j,i], 0.0, 0.0)
         
-        for i in range(0,height_size):  
-            theta_il_env[i]=theta_il_calc(pres[i],temp_env[j,i],q_env[j,i],0.0,0.0)
-        
-        theta_il_plume[ind_init[j]]=theta_il_env[ind_init[j]]
-        qt_plume[ind_init[j]]=q_env[j,ind_init[j]]
-        temp_plume[j,ind_init[j]]=temp_env[j,ind_init[j]]
-    
+        # initialize plume properties
+        theta_il_plume[ind_init[j]] = theta_il_env[ind_init[j]]
+        qt_plume[ind_init[j]] = q_env[j,ind_init[j]]
+        temp_plume[j,ind_init[j]] = temp_env[j,ind_init[j]]
+        temp_v_plume[j,ind_init[j]] = temp_v_calc(temp_plume[j,ind_init[j]], q_env[j,ind_init[j]], 0)
+
         freeze = 0
         
-        for i in range(ind_init[j]+1,height_size):
-        
+        for i in range(ind_init[j] + 1, height_size):
+
             ## Mix the liquid water potential temperature and the total water ##
-            
             if c_mix[j,i-1]>0:
-            
-                theta_il_plume[i] = (theta_il_plume[i-1] * (1.-c_mix[j,i-1])) + (theta_il_env[i-1] * c_mix[j,i-1])
+                theta_il_plume[i] = theta_il_plume[i-1] * (1. - c_mix[j,i-1]) + theta_il_env[i-1] * c_mix[j,i-1]
                 qt_plume[i] = (qt_plume[i-1] * (1.-c_mix[j,i-1])) + (q_env[j,i-1] * c_mix[j,i-1])
             else:                
                 theta_il_plume[i] = theta_il_plume[i-1]
                 qt_plume[i] = qt_plume[i-1]
-       
-            if (isfinite(theta_il_plume[i]) & isfinite(qt_plume[i])):
             
+            if (isfinite(theta_il_plume[i]) & isfinite(qt_plume[i])):
+
                 if (freeze==0):
-                    
+
                     temp_plume[j,i]=temp_calc(pres[i], theta_il_plume[i], qt_plume[i])
                     
                     if (temp_plume[j,i]<=tmelt):
@@ -536,9 +579,10 @@ np.ndarray[DTYPE1_t, ndim=1] ind_init):
                         q2_fr = q_plume
                         qi_fr = qt_plume[i] - q2_fr
                         qi_plume = qi_fr
-                        theta_il_plume[i]=theta_il_calc(pres[i], temp_plume[j,i], q2_fr, 0., qi_fr)
-                        temp_v_plume[j,i]=temp_v_calc(temp_plume[j,i], q2_fr, qi_fr)
+                        theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q2_fr, 0., qi_fr)
+                        temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q2_fr, qi_fr)
                         freeze = 1
+
 
                     else:
 
@@ -570,6 +614,8 @@ np.ndarray[DTYPE1_t, ndim=1] ind_init):
                         #!!!!!!!!! REMOVING WATER LOADING IN TEMP_V COMPUTATION !!!!!!!!#                            
 #                         temp_v_plume[j,i]=temp_v_calc(temp_plume[j,i], q1, 0.0)
                         #!!!!!!!!! REMOVING WATER LOADING IN TEMP_V COMPUTATION !!!!!!!!# 
+
+                    
 
                 else:
                 
