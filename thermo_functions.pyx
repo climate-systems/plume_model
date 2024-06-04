@@ -479,40 +479,50 @@ cdef temp_i_calc(double press_hPa, double theta_il, double qt):
 # Take temp, total water and return ice-liquid-vapor partition
 # microphysics1: no supersaturation allowed. All condensed water is in the form of liquid above 0C and ice below 0C 
 
-cdef microphysics1(double press_hPa, double temp_plume, double qt, double rain_out_thresh):
+cdef microphysics1(double press_hPa, double temp_plume, double qt, double rain_out_thresh, int freeze):
+    
     cdef double tmelt = 273.15
     cdef double qsw, qsi
-    cdef double q_plume, ql_plume, qi_plume, q_rain
+    cdef double q_plume, ql_plume, qi_plume, q_rain, qt_plume
 
-    if temp_plume > tmelt:
+    if freeze == 0:
+
+        qi_plume = 0.0
         qsw = qs_calc(press_hPa, temp_plume) # get saturation sp. humidity wrt water
-        
+
         if qt < qsw:
             q_plume = qt
+            ql_plume = 0.0
         else:
             q_plume = qsw                               
             ql_plume = qt - q_plume  # plume liq. water
 
-            if ql_plume > rain_out_thresh: # Top out the liquid water content at rain_out value
-                q_rain = qt - q_plume - rain_out_thresh
-                ql_plume = rain_out_thresh
+        if ql_plume > rain_out_thresh: # Top out the liquid water content at rain_out value
+            q_rain = qt - q_plume - rain_out_thresh
+            ql_plume = rain_out_thresh
+        else:
+            q_rain = 0.0
 
-        return q_plume, ql_plume, 0.0, q_rain
+    elif freeze == 1:
 
-    elif temp_plume <= tmelt:
+        ql_plume = 0.0
         qsi = qsi_calc(press_hPa, temp_plume)
 
         if qt < qsi:
             q_plume = qt
+            qi_plume = 0.0
         else:
             q_plume = qsi
             qi_plume = qt - q_plume
 
-            if qi_plume > rain_out_thresh:   # Top out the ice content at rain_out value
-                q_rain = qt - q_plume - rain_out_thresh
-                qi_plume = rain_out_thresh
+        if qi_plume > rain_out_thresh:   # Top out the ice content at rain_out value
+            q_rain = qt - q_plume - rain_out_thresh
+            qi_plume = rain_out_thresh
+        else:
+            q_rain = 0.0
 
-        return q_plume, 0.0, qi_plume, q_rain
+    qt_plume = q_plume + ql_plume + qi_plume
+    return q_plume, ql_plume, qi_plume, q_rain, qt_plume
 
 cdef freeze_all_liquid(double press_hPa, double temp, double qt):
     
@@ -577,16 +587,6 @@ double rain_out):
     cdef np.ndarray[DTYPE_t, ndim=1] theta_il_plume= np.zeros(height_size)
     cdef np.ndarray[DTYPE_t, ndim=1] qt_plume= np.zeros(height_size)
 
-    # cdef double theta_v_plume
-    # cdef double theta_e_plume
-    # cdef double NAN
-    # NAN = float("NaN")
-
-    # cdef double qs_plume
-    cdef double q1, ql1, qsw, qsi
-    cdef double qp, qlp, qip, q_rainp
-    # cdef double x
-    
     cdef Py_ssize_t i,j 
     
     cdef double tmelt = 273.15
@@ -616,28 +616,21 @@ double rain_out):
                 qt_plume[i] = qt_plume[i-1]
             
             if (isfinite(theta_il_plume[i]) & isfinite(qt_plume[i])):
-                print(i)
+
                 if freeze == 0:
                     temp_plume[j,i] = temp_calc(pres[i], theta_il_plume[i], qt_plume[i])
-
-                    if temp_plume[j,i] > tmelt: # check if above freezing
-                        q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i] =  microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out)
-                        theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], 0.)
-                        temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i], ql_plume[j,i])
-
-                    elif temp_plume[j,i] <= tmelt: # check if below freezing
+                    if temp_plume[j,i] <= tmelt: # check if below freezing
                         temp_plume[j,i] = freeze_all_liquid(pres[i], temp_plume[j,i], qt_plume[i])                                                
-                        q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i] = microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out)
-                        theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], 0., qi_plume[j,i])
-                        temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i], qi_plume[j,i])
                         freeze = 1
 
                 elif freeze == 1:  # if frozen condensate is present
                     # continue adiabatic ascent with all additional condensation as ice
                     temp_plume[j,i] = temp_i_calc(pres[i], theta_il_plume[i], qt_plume[i])
-                    q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i] = microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out)
-                    theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], 0.0, qi_plume[j,i])                                        
-                    temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i] , qi_plume[j,i])
+                    
+                q_plume[j,i], ql_plume[j,i], qi_plume[j,i], q_rain[j,i], qt_plume[i] = microphysics1(pres[i], temp_plume[j,i], qt_plume[i], rain_out, freeze)
+                theta_il_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], 0.0, qi_plume[j,i])                                        
+                temp_v_plume[j,i] = temp_v_calc(temp_plume[j,i], q_plume[j,i] , qi_plume[j,i])
+
         
 
 def invert_theta_il(np.ndarray[DTYPE_t, ndim=2] theta_il_plume,
