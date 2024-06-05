@@ -10,9 +10,8 @@ DATE: 05/28/24
 
 import numpy as np
 from numpy import dtype
-from thermodynamic_functions import *
-# from parameters import *
-from thermo_functions import plume_lifting, calc_qsat, invert_theta_il
+from thermodynamic_functions import theta_e_calc, qs_calc, temp_v_calc
+from thermo_functions import plume_lifting
 from scipy.interpolate import interp1d
 import scipy.io as sio
 from copy import deepcopy
@@ -22,8 +21,7 @@ from thermodynamic_functions import calc_geopotential_height, calc_pres_from_hei
 import warnings
 
 
-dir = '/neelin2020/ARM/ARM_Nauru/'
-def preprocess_data(dir = dir):
+def preprocess_data(dir):
 
     """
     Preprocess data before feeding into plume model.
@@ -93,7 +91,23 @@ def preprocess_ARMBE(fils):
 
     ds_subset = ds_subset.assign(sphum_h = qs_calc(ds_subset.pressure_h, ds_subset.dewpoint_h))
 
-    return ds_subset.temperature_h.values, ds_subset.sphum_h.values, ds_subset.pressure_h.values, ds_subset.height.values, ds_subset.time
+    return ds_subset.temperature_h.values, ds_subset.sphum_h.values, ds_subset.pressure_h.values, ds_subset.time
+
+
+def preprocess_Nauru(fils):
+
+    """
+    Assumes ARMBE data. Uses the high-resolution height coordinates to calculate pressure.
+    Computes specific humidity from dewpoint temperature and pressure.
+    """
+
+    ds = xr.open_mfdataset(fils)
+    vars = ['temperature', 'humidity']
+    ds_subset = ds[vars]
+    lev = ds.levels.broadcast_like(ds['temperature'])
+    return ds_subset.temperature.values, ds_subset.humidity.values * 1e-3, lev.values, ds_subset.time
+
+
 
 class PlumeModel:
 
@@ -104,16 +118,22 @@ class PlumeModel:
                  launch_opt = 'surface', # launch from surface or specify pressure level 
                  launch_level = 1000,
                  DIB_mix_upper = 450, 
-                 rain_out = 1e-3) -> None:
+                 rain_out = 1e-3, 
+                 microphysics = 1, 
+                 C0 = 0.1) -> None:
         
         if launch_opt not in ['surface', 'specified']:
             raise ValueError('launch_opt must be either surface or specified')
+        if mix_opt not in ['DIB', 'NOMIX']:
+            raise ValueError('mix_opt must be either DIB or NOMIX')
 
         self.fils = fils
         self.preprocess = preprocess
         self.launch_lev = launch_level  # launch level in hPa
         self.launch_opt = launch_opt
         self.DIB_mix_upper = DIB_mix_upper
+        self.micro = microphysics
+        self.C0 = C0
 
         self.temp_v_plume = None
         self.temp_plume = None
@@ -152,7 +172,7 @@ class PlumeModel:
         """
 
         # preprocess data
-        T, q, lev, z, self.time = self.preprocess(self.fils)
+        T, q, lev, self.time = self.preprocess(self.fils)
         self.T, self.q, self.lev = T, q, lev
 
         # interpolate to higher resolution
@@ -215,7 +235,6 @@ class PlumeModel:
                 ## The mass-flux (= vertical velocity) is a sine wave from near surface
                 ## to iz_upper. Designed to be 1 at the level of launch
                 ## and 0 above max. w i.e., no mixing in the upper trop.
-
                 arg = np.pi * 0.5 * (self.lev[self.ind_surface[i] - 1] - self.lev) / (self.lev[self.ind_surface[i] - 1] - self.lev[iz_upper])
                 w_mean[i, :] = np.sin(arg)    
                 self.c_mix_DIB[i, 1:-1]= (w_mean[i, 2:] - w_mean[i, :-2])/(w_mean[i, 2:] + w_mean[i, :-2])
@@ -242,7 +261,8 @@ class PlumeModel:
         print(f'RUNNING {mix} PLUME COMPUTATION')
         plume_lifting(self.T, self.q, self.temp_v_plume, self.temp_plume, 
                       self.q_plume, self.ql_plume, self.qi_plume, self.q_rain,
-                      mixing_coefs, self.lev, self.ind_launch, self.rain_out)
+                      mixing_coefs, self.lev, self.ind_launch, self.rain_out,
+                      self.micro, self.C0)
         
         self.mix_opt = mix
 
@@ -255,8 +275,8 @@ class PlumeModel:
         qsat_env = qs_calc(self.lev, self.T)
         Tv_env = temp_v_calc(self.T, self.q, 0.0)
         T_env = deepcopy(self.T)
+        q_env = deepcopy(self.q)
 
-        
         # fill plume properties with NaNs
         nan_idx = np.where(np.isnan(self.T))
         self.temp_plume[nan_idx] = np.nan
@@ -265,6 +285,8 @@ class PlumeModel:
         zero_idx = np.where(self.temp_plume == 0)  # levels where plume is not active      
         T_env[zero_idx] = np.nan
         Tv_env[zero_idx] = np.nan
+        q_env[zero_idx] = np.nan
+
         self.temp_v_plume[zero_idx] = np.nan
         self.temp_plume[zero_idx] = np.nan
 
@@ -274,17 +296,16 @@ class PlumeModel:
         self.qi_plume[nan_idx] = np.nan
         self.q_rain[nan_idx] = np.nan
 
-        thetae_env = theta_e_calc(self.lev, self.T, self.q)
-        thetae_sat_env = theta_e_calc(self.lev, self.T, qsat_env)
-        thetae_plume = theta_e_calc(self.lev, self.temp_plume, self.q_plume)
-
-        # thetae_plume[nan_idx] = np.nan
+        thetae_env = theta_e_calc(self.lev, self.T, self.q, 0.0)
+        thetae_sat_env = theta_e_calc(self.lev, self.T, qsat_env, 0.0)
+        thetae_plume = theta_e_calc(self.lev, self.temp_plume, self.q_plume, self.ql_plume)
 
         print('SAVING FILE')
 
         data_vars = dict(T_plume = (("time", "lev"), self.temp_plume),
                          Tv_plume = (("time", "lev"), self.temp_v_plume),
                          T_env = (("time", "lev"), T_env),
+                         q_env = (("time", "lev"), q_env),
                          Tv_env = (("time", "lev"), Tv_env),
                          thetae_env = (("time", "lev"), thetae_env),
                          thetae_sat_env = (("time", "lev"), thetae_sat_env),

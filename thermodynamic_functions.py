@@ -242,36 +242,47 @@ def theta_il_calc(press_hPa, temp, q, ql, qi):
     return theta_il
 
 
-def theta_e_calc (press_hPa, temp, q):
+def theta_e_calc (press_hPa, temp, q, ql):
 
     #get some constants:
     pref = 100000.
     tmelt  = 273.15
-    CPD=1005.7
-    CPV=1870.0
-    CPVMCL=2320.0
-    RV=461.5
-    RD=287.04
-    EPS=RD/RV
-    ALV0=2.501E6
+    CPD = 1005.7
+    CPV = 1870.0
+    CPVMCL = 2320.0
+    RV = 461.5
+    RD = 287.04
+    EPS = RD/RV
+    ALV0 = 2.501E6
+    CL = 4184.0
+
 
     #convert inputs to proper units, forms 
     press = press_hPa * 100. # in Pa
     tempc = temp - tmelt # in C
-
-    r = q / (1. - q)
+    r = q / (1. -q -ql)
+    rt = (q + ql)/ (1. - q - ql)
 
     # get ev in hPa 
     ev_hPa = press_hPa * r / (EPS + r)
+    H = ev_hPa * 1e2/es_calc(temp) # relative humidity
+    ALV = ALV0 - CPVMCL * tempc  # Latent heat of vaporization
 
     #get TL
     TL = (2840. / ((3.5*np.log(temp)) - (np.log(ev_hPa)) - 4.805)) + 55.
 
     #calc chi_e:
-    chi_e = 0.2854 * (1. - (0.28*r))
+    # chi_e = 0.2854 * (1. - (0.28*r))
+    chi_e = RD/(CPD + (rt * CL))
 
-    theta_e = temp * (pref / press)**chi_e * np.exp(((3.376/TL) - 0.00254) * r * 1000. * (1. + (0.81 * r)))
+    # theta_e = temp * (pref / press)**chi_e * np.exp(((3.376/TL) - 0.00254) * r * 1000. * (1. + (0.81 * r)))
+    theta_e = temp * pow((pref / press), chi_e) * np.exp( ALV * r / ((CPD + rt * CL) * temp)) * pow(H, -r * RV/ (CPD + (rt * CL))) 
+
     return theta_e
+
+
+   
+
 
 def theta_calc(press_hPa, temp):
 
