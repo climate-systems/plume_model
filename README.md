@@ -1,5 +1,5 @@
 # plume_model
-A simple model to compute plume thermodynamic properties upon lifting and mixing.
+A simple model to compute plume thermodynamic properties upon lifting and mixing.<br>
 Written by: Fiaz Ahmed (exhaustive rewrite of legacy codes in IDL).
 
 Ensure that python is installed on your machine with requisite libraries (see requirements.txt).
