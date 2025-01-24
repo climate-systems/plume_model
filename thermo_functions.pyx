@@ -558,6 +558,56 @@ cdef microphysics2(double press_hPa, double temp_plume, double qt):
 
     return q_plume, ql_plume, qi_plume, qt_plume
 
+cdef microphysics3(double press_hPa, double temp_plume, double qt, int freeze):
+
+    """
+    Microphysics scheme 3:  All condensed water is in the form of liquid above 0C. 
+    The liquid water is converted to ice to maintain the plume temperature at freezing.
+    The freeze flag is used to check if the plume is below/above freezing.
+
+    Input Arguments
+    ---------------
+    pressure (hPa), temperature (K), total water content (vapor + liquid + ice) (kg/kg), freeze flag (0 or 1)
+
+    Returns
+    -------
+    q: vapor mixing ratio (kg/kg)
+    ql: liquid water mixing ratio (kg/kg)
+    qi: ice mixing ratio (kg/kg)
+    qt: total water content (kg/kg)
+    """
+
+    cdef double tmelt = 273.15
+    cdef double qsw, qsi
+    cdef double q_plume, ql_plume, qi_plume, qt_plume
+
+    if freeze == 0:
+        qi_plume = 0.0
+        qsw = qs_calc(press_hPa, temp_plume) # get saturation sp. humidity wrt water
+
+        if qt < qsw:
+            q_plume = qt
+            ql_plume = 0.0
+        else:
+            q_plume = qsw                               
+            ql_plume = qt - q_plume  # plume liq. water
+
+    elif freeze == 1:
+        ql_plume = 0.0
+        qsi = qsi_calc(press_hPa, temp_plume)
+
+        if qt < qsi:
+            q_plume = qt
+            qi_plume = 0.0
+        else:
+            q_plume = qsi
+            qi_plume = qt - q_plume
+
+    qt_plume = q_plume + ql_plume + qi_plume
+    return q_plume, ql_plume, qi_plume, qt_plume
+
+
+
 cdef rainout_hydrometeors(double temp, double press_hPa, double qt,
                           double ql, double qi, double rain_out_thresh, 
                           double C0):
