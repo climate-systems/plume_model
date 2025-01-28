@@ -1,3 +1,4 @@
+*.nc
 plume_props_CACTI.nc
 thermo_functions.c
 thermo_functions.cpython-38-x86_64-linux-gnu.so
