@@ -49,7 +49,7 @@ def calc_geopotential_height(temp, sphum, press_hPa, vertical_axis = -1):
     return z
     
 
-def temp_v_calc (temp, q, ql):
+def temp_v_calc (temp, q, qt):
 
     # get some constants:
     RV=461.5
@@ -57,9 +57,8 @@ def temp_v_calc (temp, q, ql):
     EPS=RD/RV
 
     # convert inputs to proper units, forms 
-    r = q / (1. - q - ql)
-    rl =  ql / (1. - q - ql)
-    rt = r + rl
+    r = q / (1. - qt)
+    rt = qt / (1 - qt)
 
     # calc. temp_v
     temp_v = temp * (1. + (r/EPS)) / (1. + rt)
