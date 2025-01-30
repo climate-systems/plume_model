@@ -71,42 +71,49 @@ cdef es_calc_bolton(double temp):
     es = 6.112*exp(17.67*tempc/(243.5+tempc))
     return es
 
-
 cdef es_calc(double temp):
 
-    cdef double tmelt  = 273.15
-    cdef double tempc,tempcorig 
-    cdef double c0,c1,c2,c3,c4,c5,c6,c7,c8
-    cdef double es
-    
-    c0=0.6105851e+03
-    c1=0.4440316e+02
-    c2=0.1430341e+01
-    c3=0.2641412e-01
-    c4=0.2995057e-03
-    c5=0.2031998e-05
-    c6=0.6936113e-08
-    c7=0.2564861e-11
-    c8=-.3704404e-13
+    cdef double ttrip  = 273.15
+    cdef double cpv = 1870
+    cdef double cpl = 4190
+    cdef double Rv = 461.5
+    cdef double xlv = 2501000.0
+    cdef double eref = 611.2
 
-    tempc = temp - tmelt 
-    tempcorig = tempc
+    cdef double term1, term2, esl
+
+    term1 = ( cpv - cpl )/Rv
+    term2 = ( xlv - ttrip * (cpv - cpl) )/Rv
+    esl = exp( (temp - ttrip) * term2 / (temp * ttrip) ) * eref * pow( temp / ttrip, term1)
+
+    # term1 = ( cpv - cpl )/RV
+    # term2 = ( xlv - ttrip * (cpv - cpl) )/RV
+    # esl = exp( (temp - ttrip) * term2 / (temp * ttrip)) * eref * pow(temp / ttrip, term1)
+
     
-    if tempc < -80:
-        # in hPa
-        es=es_calc_bolton(temp)
-    else:
-        # in Pa: convert to hPa
-        es=c0+tempc*(c1+tempc*(c2+tempc*(c3+tempc*(c4+tempc*(c5+tempc*(c6+tempc*(c7+tempc*c8)))))))
-        es=es/100
-    
-    return es
+    return esl
 
 cdef esi_calc(double temp):
-    cdef double esi
-    esi = exp(23.33086 - (6111.72784/temp) + (0.15215 * log(temp)))
+
+    cdef double ttrip  = 273.15
+    cdef double cpv = 1870
+    cdef double cpl = 4190
+    cdef double Rv = 461.5
+    cdef double xlv = 2501000.0
+    cdef double eref = 611.2
+    cdef double xls = 2834000.0
+    cdef double cpi = 2106.0
+
+    cdef double term1, term2, esi
+
+    term1 = (cpv - cpi) / Rv
+    term2 = ( xls - ttrip * (cpv - cpi)) / Rv
+
+    esi = exp( (temp - ttrip) * term2/(temp * ttrip)) * eref * pow(temp/ttrip, term1)
+
     return esi
-    
+
+
 cdef qs_calc(double press_hPa, double temp):
 
     cdef double tmelt  = 273.15
@@ -114,13 +121,12 @@ cdef qs_calc(double press_hPa, double temp):
     cdef double RD=287.04
     cdef double EPS, press, tempc, es, qs
 
-    EPS=RD/RV
+    EPS = RD/RV
 
     press = press_hPa * 100. 
     tempc = temp - tmelt 
 
-    es=es_calc(temp) 
-    es=es * 100. #hPa
+    es = es_calc(temp) 
     qs = (EPS * es) / (press + ((EPS-1.)*es))
     return qs
 
@@ -134,10 +140,95 @@ cdef qsi_calc(double press_hPa, double temp):
         
     EPS=RD/RV
     press = press_hPa * 100
-    esi=esi_calc(temp) 
-    esi=esi*100. #hPa 
+    esi = esi_calc(temp) 
     qsi = (EPS * esi) / (press + ((EPS-1.)*esi))
     return qsi
+
+
+# from ChatGPT
+cdef omega(double T, double T1, double T2):
+    """
+    Discriminator function between liquid and ice 
+    (i.e., omega defined in the beginning of section 2e in Peters et al. 2022)
+    """
+    cdef double x = (T - T1) / (T2 - T1)
+    cdef double h1 = 1.0 if x > 0 else 0.0
+    cdef double h2 = 1.0 if (1 - x) > 0 else 0.0
+    return x * h1 * h2 + (1.0 if (1 - x) <= 0 else 0.0)
+
+cdef compute_rsat(double press_hPa, double temp, double T1, double T2, int iceflag):
+
+    #FUNCTION THAT CALCULATES THE SATURATION MIXING RATIO    
+    #THIS FUNCTION COMPUTES THE SATURATION MIXING RATIO, USING THE INTEGRATED
+    #CLAUSIUS CLAPEYRON EQUATION (eq. 7-12 in Peters et al. 2022).
+    #https://doi-org.ezaccess.libraries.psu.edu/10.1175/JAS-D-21-0118.1 
+
+    #input arguments
+    #T temperature (in K)
+    #p pressure (in hPa)
+    #iceflag (give mixing ratio with respect to liquid (0), combo liquid and
+    #ice (2), or ice (3)
+    #T1 warmest mixed-phase temperature
+    #T2 coldest mixed-phase temperature
+
+    #NOTE: most of my scripts and functions that use this function need
+    #saturation mass fraction qs, not saturation mixing ratio rs.  To get
+    #qs from rs, use the formula qs = (1 - qt)*rs, where qt is the total
+    #water mass fraction
+
+    #CONSTANTS
+
+    cdef double press
+
+    press = press_hPa * 100 #convert pressure to Pa
+    omeg = omega(temp, T1, T2)
+
+    cdef double RV=461.5
+    cdef double RD=287.04
+    cdef double cpv = 1870.
+    cdef double cpl = 4190.
+    cdef double cpi = 2106.
+    cdef double xls = 2834000.
+    cdef double xlv = 2501000.
+    cdef double ttrip = 273.15
+    cdef double eref = 611.2
+    cdef double EPS
+
+    cdef double rsat, esl, esi, qsat_l, qsat_i, term1, term2
+    cdef double esl_l, esl_i
+
+    EPS = RD/RV
+
+    if iceflag == 0:
+
+        term1 = ( cpv - cpl )/RV
+        term2 = ( xlv - ttrip * (cpv - cpl) )/RV
+        esl = exp( (temp - ttrip) * term2 / (temp * ttrip)) * eref * pow(temp / ttrip, term1)
+        rsat = EPS * esl / (press - esl)
+
+    elif iceflag == 1: #give linear combination of mixing ratio with respect to liquid and ice (eq. 20 in Peters et al. 2022)
+
+        term1 = (cpv - cpl)/RV
+        term2 = ( xlv - ttrip * ( cpv - cpl ) ) / RV
+        esl_l = exp( ( temp - ttrip ) * term2/( temp * ttrip )) * eref * pow( temp / ttrip, term1)
+        qsat_l = EPS * esl_l/(press - esl_l)
+
+        term1 = (cpv - cpi) / RV
+        term2 = ( xls - ttrip * (cpv - cpi)) / RV
+        esl_i = exp( (temp - ttrip) * term2/(temp * ttrip)) * eref * pow(temp / ttrip, term1)
+        qsat_i = EPS * esl_i / ( press - esl_i )
+        
+        rsat = ( 1 - omeg ) * qsat_l + omeg * qsat_i
+
+    elif iceflag == 2: #only give mixing ratio with respect to ice
+        term1 = ( cpv - cpi ) / RV
+        term2 = ( xls - ttrip * ( cpv - cpi )) / RV
+        esi = exp( (temp - ttrip ) * term2/(temp * ttrip) )* eref * pow(temp / ttrip, term1)
+        esi = min( esi , press * 0.5 )
+        rsat = EPS * esi / ( press - esi )
+
+    return rsat
+
 
 cdef theta_v_calc(double press_hPa, double temp, double q, double qt):
 
@@ -170,7 +261,7 @@ cdef theta_v_calc(double press_hPa, double temp, double q, double qt):
     theta_v = temp_v * pow((pref/press), (RD/CPD) )
     return theta_v
 
-cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi):
+cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi, int qsat_opt):
 
     """
     Compute ice-liquid potential temperature (theta_il) following eq.(25) from Bryan and Fritsch 2004, MWR.
@@ -180,7 +271,7 @@ cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi
     Input Arguments
     ---------------
     pressure (hPa), temperature (K), specific humidity q (kg/kg), specific liquid water ql (kg/kg) 
-    specific ice water qi (kg/kg).
+    specific ice water qi (kg/kg), qsat_opt: 1-use empirical formulations for rh, 2-use formulas from Peters et al. 2022
 
     Returns
     -------
@@ -199,17 +290,21 @@ cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi
     cdef double tmelt  = 273.15
     cdef double CPD=1005.7
     cdef double CPV=1870.0
+    cdef double CI=2106.0
     cdef double CPVMCL=2320.0
     cdef double RV=461.5
     cdef double RD=287.04
     cdef double EPS=RD/RV
     cdef double ALV0=2.501E6
-    cdef double LS=2.834E6
+    cdef double LS0=2.834E6
+    cdef double T1 = 273.15
+    cdef double T2 = 233.15
+
     cdef double press,tempc
-    cdef double r, rl, ri, rt
-    cdef double ALV, chi, gam
+    cdef double r, rl, ri, rt, qsl, qsi
+    cdef double ALV, LS, chi, gam
     cdef double theta_il, Hl, Hi, e
-    cdef double exponent, CPDV
+    cdef double exponent, CPDV, ci
 
     press = press_hPa * 100. 
     tempc = temp - tmelt 
@@ -219,7 +314,8 @@ cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi
     ri =  qi / (1. - q - ql - qi)
     rt = r + rl + ri
 
-    ALV = ALV0 - (CPVMCL * tempc)
+    ALV = ALV0 - (CPVMCL * tempc)    
+    LS = LS0 + (CPV - CI) * tempc
 
     CPDV = CPD + rt * CPV
 
@@ -228,11 +324,22 @@ cdef theta_il_calc(double press_hPa, double temp, double q, double ql, double qi
 
     # saturation vapor pressures
     e = r * press /(EPS + r)
-    Hl = e/es_calc(temp)
-    Hi = e/esi_calc(temp)
+    # rsat = EPS * esl / (press - esl)
 
-    exponent = (-ALV*rl - LS*ri)/(CPDV * temp)\
-     + (RV/CPDV) * (rl * log(Hl) +  ri * log(Hi))
+    if qsat_opt == 1:
+
+        Hl = e/es_calc(temp)
+        Hi = e/esi_calc(temp)
+
+    elif qsat_opt == 2:
+
+        qsl = compute_rsat(press_hPa, temp, T1, T2, 0) * (1 - q - ql - qi)
+        qsi = compute_rsat(press_hPa, temp, T1, T2, 2) * (1 - q - ql - qi)
+        Hl = q/qsl
+        Hi = q/qsi
+
+
+    exponent = (-ALV*rl - LS*ri)/(CPDV * temp) + (RV/CPDV) * (rl * log(Hl) +  ri * log(Hi))
 
     # eq. (25) of Bryan and Fritsch, 2004.
     theta_il = temp * pow(pref / press, chi) * pow(1. - (rl + ri)/(EPS + rt), chi) * pow(1. - (rl + ri)/rt, -gam) * exp(exponent)
@@ -305,59 +412,9 @@ cdef theta_e_calc (double press_hPa, double temp, double q, double ql, double qi
     theta_e = temp * pow( pref * R / (press * RE), chi) * pow(es/e, gamma) * pow(tmelt / temp, gammi) * exp( exponent )
     return theta_e
 
-# cdef theta_e_calc (double press_hPa, double temp, double q, double ql):
-
-#     """
-#     Compute equivalent potential temperature (thetae) following Emanuel (1994), eq.(4.5.11) 
-
-#     Input Arguments
-#     ---------------
-#     pressure (hPa), temperature (K), specific humidity q (kg/kg) and specific liquid water ql (kg/kg) 
-
-#     Returns
-#     -------
-#     Equivalent potential temperature thetae (K)
-
-#     Reference
-#     ---------
-#         Emanuel, K. A. (1994). Atmospheric convection. Oxford University Press, USA.
-
-#     """
-
-#     cdef double pref = 100000.
-#     cdef double tmelt  = 273.15
-#     cdef double CPD=1005.7
-#     cdef double CPV=1870.0
-#     cdef double CPVMCL=2320.0
-#     cdef double CL = 4184.0
-#     cdef double RV=461.5
-#     cdef double RD=287.04
-#     cdef double EPS=RD/RV
-#     cdef double ALV0=2.501E6
-#     cdef double press, tempc,theta_e
-#     cdef double r,ev_hPa, TL, chi_e, H, ALV
-    
-#     press = press_hPa * 100. # in Pa
-#     tempc = temp - tmelt # in C
-
-#     r = q / (1. -q -ql)
-#     rt = (q + ql)/ (1. - q - ql)
-   
-#    # get ev in hPa 
-#     ev_hPa = press_hPa * r / (EPS + r)
-#     H = ev_hPa * 1e2/es_calc(temp) # relative humidity
-#     ALV = ALV0 - CPVMCL * tempc  # Latent heat of vaporization
-
-#     #calc chi_e:
-#     chi_e = RD/(CPD + (rt * CL))
-
-#     theta_e = temp * pow((pref / press), chi_e) * pow(H, -r * RV/ (CPD + (rt * CL))) * exp( ALV * r / ((CPD + rt * CL) * temp))
-
-#     return theta_e
-
-
 
 cdef theta_l_calc(double press_hPa, double temp,double q,double ql):
+
     cdef double pref = 100000.
     cdef double tmelt  = 273.15
     cdef double CPD=1005.7
@@ -385,49 +442,9 @@ cdef theta_l_calc(double press_hPa, double temp,double q,double ql):
     theta_l = temp * pow(pref / press, chi) * pow(1. - rl/(EPS + rt), chi) * pow((1. - rl/rt), -gam) * exp( -ALV * rl /((CPD + rt * CPV) * temp))
     return theta_l
 
-cdef theta_il_temp(double press_hPa, double temp_plume, double qt, 
-                  double rain_out_thresh, int freeze, int micro, double C0):
-
-    """
-    Wrapper to calculate ice-liquid-vapor partitioning and theta_il for a given temperature and total water content,
-        based on the microphysics scheme.
-    
-    Input Arguments
-    ---------------
-    pressure (hPa), 
-    temp: temperature (K), 
-    qt: total water content (vapor + liquid + ice) (kg/kg) 
-    rain_out_thresh: threshold for rainout (kg/kg) 
-    freeze: flag for freezing (0 or 1) 
-    micro: microphysics scheme (1 or 2)
-    C0 : autoconversion coefficient (unitless). The fraction of condensate above the rain_out threshold
-        that is converted to rain.
-
-    Returns
-    -------
-    theta_il: ice-liquid-vapor partitioning and total water content (kg/kg)
-    q: vapor mixing ratio (kg/kg)
-    ql: liquid water mixing ratio (kg/kg)
-    qi: ice mixing ratio (kg/kg)
-    qt: total water content (kg/kg)
-
-    """
-
-    cdef double theta_il, q, ql, qi 
-
-    # use microphysics to compute vapor-water-ice partitioning
-    if micro == 1:
-        q, ql, qi, qt = microphysics1(press_hPa, temp_plume, qt, freeze)
-
-    elif micro == 2:
-        q, ql, qi, qt = microphysics2(press_hPa, temp_plume, qt)
-
-    # compute theta_il
-    theta_il = theta_il_calc(press_hPa, temp_plume, q, ql, qi)
-    return theta_il, q, ql, qi, qt
-
 cdef phi_temp(double press_hPa, double temp_plume, double qt, 
-              double rain_out_thresh, int freeze, int conserved, int micro, double C0):
+              double rain_out_thresh, int freeze, int conserved, int micro, double C0, 
+              int qsat_opt):
 
     """
     Wrapper to calculate ice-liquid-vapor partitioning and conserved variable phi for a given temperature and total water content,
@@ -444,6 +461,8 @@ cdef phi_temp(double press_hPa, double temp_plume, double qt,
     micro: microphysics scheme (1 or 2)
     C0 : autoconversion coefficient (unitless). The fraction of condensate above the rain_out threshold
         that is converted to rain.
+    qsat_opt: option to compute qsat in different ways (1 or 2)
+    1: use empirical formulas, 2: use formulas from Peters et al. 2022
 
     Returns
     -------
@@ -455,97 +474,26 @@ cdef phi_temp(double press_hPa, double temp_plume, double qt,
 
     """
 
-    cdef double phi, q, ql, qi 
+    cdef double phi, q, ql, qi, qt_out
 
     # use microphysics to compute vapor-water-ice partitioning
     if micro == 1:
-        q, ql, qi, qt = microphysics1(press_hPa, temp_plume, qt, freeze)
+        q, ql, qi, qt_out = microphysics1(press_hPa, temp_plume, qt, freeze)
 
     elif micro == 2:
-        q, ql, qi, qt = microphysics2(press_hPa, temp_plume, qt)
+        q, ql, qi, qt_out = microphysics2(press_hPa, temp_plume, qt)
 
     # compute theta_il
     if conserved == 1:
-        phi = theta_il_calc(press_hPa, temp_plume, q, ql, qi)
+        phi = theta_il_calc(press_hPa, temp_plume, q, ql, qi, qsat_opt)
     elif conserved == 2:
         phi = theta_e_calc(press_hPa, temp_plume, q, ql, qi)
 
-    return phi, q, ql, qi, qt
+    return phi, q, ql, qi, qt_out
 
-cdef invert_theta_il(double press_hPa, double theta_il, double qt, 
-                     double rain_out_thresh, int freeze, int micro, double C0):
-
-    """
-    Invert theta_il to obtain temperature using the secant method.
-
-    Our given function has the form f[x, y(x), ...]. Note that y is a function of x.
-    For a target value f0, and initial guesses x0 and x1, the secant method gives an updated guess x2:
-    x2 = x1 - (f[x1, y(x1), ...] - f0) * (x1 - x0) / (f[x1, y(x1), ...] - f[x0, y(x0), ...]).  
-    The updates stop when the new guess is within a specified tolerance of the old guess (convergence is assumed).
-    This method is liable to break down if the function is not smooth or if the initial guesses are poor.
-
-    For our case, f[x, y(x)] = theta_il[p, T, q, ql(T), qi(T)], where the condensate amounts ql and qi are functions of temperature T.
-    The microphysics parameterization will determine ql and qi for a given T. The target value f0 is the theta_il that must be inverted. 
-
-    Input Arguments
-    ---------------
-    pressure (hPa), theta_il (K), 
-    qt: total water content (vapor + liquid + ice) (kg/kg),
-    rain_out_thresh: threshold for rainout (kg/kg),
-    freeze: flag for freezing (0 or 1),
-    micro: microphysics scheme (1 or 2),
-    C0 : autoconversion coefficient (unitless) 
-
-    Returns
-    -------
-    temp: inverted temperature(K)
-    plume water species consistent with temp: 
-        q: vapor mixing ratio (kg/kg)
-        ql: liquid water mixing ratio (kg/kg)
-        qi: ice mixing ratio (kg/kg)
-
-    Note
-    ----
-    The total water qt must be unaffected by the inversion. 
-
-    """
-
-    cdef double pref = 100000.
-    cdef double CPD = 1005.7
-    cdef double CPV = 1870.0
-    cdef double RD = 287.04
-    cdef double RV = 461.5
-    cdef double press, TL, T0, T1
-    cdef double deltaT = 999.0
-    cdef double temp, theta_il_new, theta_il0
-    cdef double fx, dfx, dfxx
-    cdef double q, ql, qi, q_rain, qt_new
-    cdef double q0, ql0, qi0, q_rain0, qt0
-    
-    cdef double rt, chi, gam
-
-    press = press_hPa * 100. 
-    rt = qt/(1-qt)
-    chi = (RD + (rt * RV)) / (CPD + (rt * CPV))
-
-    # first guesses
-    T0 = theta_il * pow(press / pref, chi)  # invert theta_il without condensate
-    T1 = T0 + 1.0  # add 1 K for the second guess
-    temp = T1
-
-    while abs(deltaT) >= 1e-5:  # convergence criterion
-        theta_il_new, q, ql, qi, qt_new = theta_il_temp(press_hPa, temp, qt, rain_out_thresh, freeze, micro, C0) # f[x1, y(x1), ...]
-        theta_il0, q0, ql0, qi0, qt0 = theta_il_temp(press_hPa, T0, qt, rain_out_thresh, freeze, micro, C0) # f[x0, y(x0), ...]
-        dfx = (theta_il_new - theta_il0)/(temp - T0) # f'[x, y(x), ...]
-        fx = theta_il_new - theta_il  # f[x, y(x), ...] - f0
-        deltaT = fx/dfx
-        T0 = temp  # update x0
-        temp = temp - deltaT  # update x1
-
-    return temp, q, ql, qi
-
-cdef invert_phi(double press_hPa, double phi, double qt, 
-                double rain_out_thresh, int freeze, int conserved, int micro, double C0):
+cdef invert_phi(double press_hPa, double phi_target, double qt, 
+                double rain_out_thresh, int freeze, int conserved, int micro, double C0, 
+                double T0, int qsat_opt):
 
     """
     Invert conserved variable phi to obtain temperature using the secant method.
@@ -568,6 +516,7 @@ cdef invert_phi(double press_hPa, double phi, double qt,
     conserved: flag for conserved variable (1 - theta_il, 2 - theta_e),
     micro: microphysics scheme (1 or 2),
     C0 : autoconversion coefficient (unitless) 
+    T0: first guess for temperature (K)
 
     Returns
     -------
@@ -589,9 +538,9 @@ cdef invert_phi(double press_hPa, double phi, double qt,
     cdef double RD = 287.04
     cdef double RV = 461.5
     cdef double ALV0=2.501E6
-    cdef double press, TL, T0, T1
+    cdef double press, Ttemp, T1
     cdef double deltaT = 999.0
-    cdef double temp, phi_new, phi0
+    cdef double temp, phi1, phi0
     cdef double fx, dfx, dfxx
     cdef double q, ql, qi, q_rain, qt_new
     cdef double q0, ql0, qi0, q_rain0, qt0
@@ -602,31 +551,22 @@ cdef invert_phi(double press_hPa, double phi, double qt,
     rt = qt/(1-qt)
     chi = (RD + (rt * RV)) / (CPD + (rt * CPV))
 
-    # first guesses
-    if conserved == 1:
-        T0 = phi * pow(press / pref, chi)  # invert theta_il without condensate
-    elif conserved == 2:
-        T0 =  phi * pow(press / pref, chi) #* exp( (temp * CPD ) / (q * ALV0) )  # invert theta_e without condensate
-
-    T1 = T0 + 1.0  # add 1 K for the second guess
-    temp = T1
+    T1 = T0 + 2.0  # add 2 K for the second guess
 
     while abs(deltaT) >= 1e-4:  # convergence criterion
         
-        phi_new, q, ql, qi, qt_new = phi_temp(press_hPa, temp, qt, rain_out_thresh, freeze, conserved, micro, C0) # f[x1, y(x1), ...]
-        phi0, q0, ql0, qi0, qt0 = phi_temp(press_hPa, T0, qt, rain_out_thresh, freeze, conserved, micro, C0) # f[x0, y(x0), ...]
-        dfx = (phi_new - phi0)/(temp - T0) # f'[x, y(x), ...]
-        fx = phi_new - phi  # f[x, y(x), ...] - f0
-        deltaT = fx/dfx
-        T0 = temp  # update x0
-        temp = temp - deltaT  # update x1
+        phi1, q, ql, qi, qt_new = phi_temp(press_hPa, T1, qt, rain_out_thresh, freeze, conserved, micro, C0, qsat_opt) # f[x1, y(x1), ...]
+        phi0, q0, ql0, qi0, qt0 = phi_temp(press_hPa, T0, qt, rain_out_thresh, freeze, conserved, micro, C0, qsat_opt) # f[x0, y(x0), ...]
 
-    # if conserved == 1:
-    #     temp, q, ql, qi = invert_theta_il(press_hPa, phi, qt, rain_out_thresh, freeze, micro, C0)
-    # elif conserved == 2:
-    #     temp, q, ql, qi = invert_phi(press_hPa, phi, qt, rain_out_thresh, freeze, conserved, micro, C0)
+        fx = phi1 - phi_target  # f[x, y(x), ...] - f0 # minimize this
+        dfx = (phi1 - phi0)/(T1 - T0) # f'[x, y(x), ...]
+        deltaT = fx / dfx
+        T0 = T1
+        T1 = T1 - deltaT  # update x1
 
-    return temp, q, ql, qi
+    phi_new, q, ql, qi, qt_new = phi_temp(press_hPa, T1, qt, rain_out_thresh, freeze, conserved, micro, C0, qsat_opt)
+
+    return T1, q, ql, qi
 
 
 cdef microphysics1(double press_hPa, double temp_plume, double qt, int freeze):
@@ -704,6 +644,7 @@ cdef microphysics2(double press_hPa, double temp_plume, double qt):
     cdef double qsw, qsi
     cdef double q_plume, ql_plume, qi_plume, q_rain, qt_plume
     cdef double Fi
+    cdef double T1 = 273.15, T2 = 233.15
 
     q_rain = 0.0
 
@@ -711,7 +652,6 @@ cdef microphysics2(double press_hPa, double temp_plume, double qt):
 
         qi_plume = 0.0
         qsw = qs_calc(press_hPa, temp_plume) # get saturation sp. humidity wrt water
-
         if qt < qsw:
             q_plume = qt
             ql_plume = 0.0
@@ -926,11 +866,12 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
                     np.ndarray[DTYPE_t, ndim=2] ql_plume,
                     np.ndarray[DTYPE_t, ndim=2] qi_plume,
                     np.ndarray[DTYPE_t, ndim=2] q_rain,
+                    np.ndarray[DTYPE_t, ndim=2] phi_plume,
                     np.ndarray[DTYPE_t, ndim=2] c_mix,
                     np.ndarray[DTYPE1_t, ndim=1] pres, 
                     np.ndarray[DTYPE1_t, ndim=1] ind_init,
                     int conserved, double rain_out_thresh, 
-                    int micro, double C0):  
+                    int micro, double C0, int qsat_opt):  
 
     '''
     Description
@@ -978,7 +919,10 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
     C0: float
         Autoconversion coefficient (unitless). The fraction of condensate above the rain_out threshold
         that is converted to rain.
-
+    qsat_opt: int
+        option to use different formulas to compute qsat (1 or 2)
+        1: uses empirical formulas, 2: uses formulas from Peters et al. 2022
+    
     Modified arguments
     ------------------
     temp_plume: 2D array
@@ -993,7 +937,8 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
         Plume ice water profile (kg/kg)
     q_rain: 2D array
         Contribution to rain (fallout) profile (kg/kg)
-
+    phi_plume: 2D array
+        Plume conserved variable profile (K)
     '''
 
     # Environmental T,q, lifting level, mixing coefficients and microphysics scheme are user defined
@@ -1004,7 +949,6 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
     
     # phi is a generic plume-conserved variable
     cdef np.ndarray[DTYPE_t, ndim=1] phi_env= np.zeros(height_size)
-    cdef np.ndarray[DTYPE_t, ndim=1] phi_plume= np.zeros(height_size)
     cdef np.ndarray[DTYPE_t, ndim=1] qt_plume= np.zeros(height_size)
 
     cdef Py_ssize_t i,j 
@@ -1016,12 +960,12 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
         for i in range(0, height_size):  
 
             if conserved == 1:
-                phi_env[i] = theta_il_calc(pres[i], temp_env[j,i], q_env[j,i], 0.0, 0.0)
+                phi_env[i] = theta_il_calc(pres[i], temp_env[j,i], q_env[j,i], 0.0, 0.0, qsat_opt)
             elif conserved == 2:
                 phi_env[i] = theta_e_calc(pres[i], temp_env[j,i], q_env[j,i], 0.0, 0.0)
 
         # initialize plume properties
-        phi_plume[ind_init[j]] = phi_env[ind_init[j]]
+        phi_plume[j, ind_init[j]] = phi_env[ind_init[j]]
         qt_plume[ind_init[j]] = q_env[j,ind_init[j]]
 
         temp_plume[j,ind_init[j]] = temp_env[j,ind_init[j]]
@@ -1038,32 +982,26 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
 
             # Mix the ice-liquid potential temperature and total water
             if c_mix[j,i-1] > 0:
-                phi_plume[i] = phi_plume[i-1] * (1. - c_mix[j,i-1]) + phi_env[i-1] * c_mix[j,i-1]
+                phi_plume[j, i] = phi_plume[i-1] * (1. - c_mix[j,i-1]) + phi_env[i-1] * c_mix[j,i-1]
                 qt_plume[i] = (qt_plume[i-1] * (1. - c_mix[j,i-1])) + (q_env[j,i-1] * c_mix[j,i-1])
             else:                
-                phi_plume[i] = phi_plume[i-1]
+                phi_plume[j, i] = phi_plume[j, i-1]
                 qt_plume[i] = qt_plume[i-1]
             
-            if (isfinite(phi_plume[i]) & isfinite(qt_plume[i])):
+            if (isfinite(phi_plume[j, i]) & isfinite(qt_plume[i])):
 
-                temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i] = invert_phi(pres[i], phi_plume[i], qt_plume[i], 
-                                                                                         rain_out_thresh, freeze, conserved, micro, C0)
-
-                # if conserved == 1:
-                #     residual = phi_plume[i]- theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i])
-                # elif conserved == 2:
-                #     residual = phi_plume[i] - theta_e_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i])
-
-                # print(residual)
+                temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i] = invert_phi(pres[i], phi_plume[j, i], qt_plume[i], 
+                                                                                         rain_out_thresh, freeze, conserved, micro, C0, 
+                                                                                         temp_plume[j, i-1], qsat_opt)
 
                 # Rainout hydrometeors and get new qt, ql and qi 
                 ql_plume[j,i], qi_plume[j,i], qt_plume[i], q_rain[j,i] = rainout_hydrometeors(temp_plume[j,i], pres[i], qt_plume[i], ql_plume[j,i], 
                                                                                               qi_plume[j,i], rain_out_thresh, C0)
                 # recompute phi with new qt, ql and qi---which changes upon rainout
                 if conserved == 1:
-                    phi_plume[i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i])
+                    phi_plume[j, i] = theta_il_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i], qsat_opt)
                 elif conserved == 2:
-                    phi_plume[i] = theta_e_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i])
+                    phi_plume[j, i] = theta_e_calc(pres[i], temp_plume[j,i], q_plume[j,i], ql_plume[j,i], qi_plume[j,i])
 
                 # if micro = 1, freeze all water if below freezing.
                 if micro == 1 and freeze == 0 and temp_plume[j,i] <= tmelt: # check if below freezing

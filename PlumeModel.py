@@ -34,7 +34,8 @@ class PlumeModel:
                  rain_out = 1e-3, 
                  conserved = 1,
                  microphysics = 1, 
-                 C0 = 0.1) -> None:
+                 C0 = 0.1, 
+                 qsat_opt = 1) -> None:
         
         if launch_opt not in ['surface', 'specified']:
             raise ValueError('launch_opt must be either surface or specified')
@@ -49,6 +50,7 @@ class PlumeModel:
         self.micro = microphysics
         self.C0 = C0
         self.conserved = conserved
+        self.qsat_opt = qsat_opt
 
         self.temp_v_plume = None
         self.temp_plume = None
@@ -89,6 +91,7 @@ class PlumeModel:
         # preprocess data
         T, q, lev, self.time = self.preprocess(self.fils)
         self.T, self.q, self.lev = T, q, lev
+        
 
         # interpolate to higher resolution
         if self.interpolate:
@@ -166,6 +169,7 @@ class PlumeModel:
         self.temp_plume, self.temp_v_plume = np.zeros_like(self.T), np.zeros_like(self.T)
         self.q_plume, self.ql_plume, self.qi_plume = np.zeros_like(self.T), np.zeros_like(self.T), np.zeros_like(self.T)
         self.q_rain = np.zeros_like(self.T)  # raining hydrometeors
+        self.phi_plume  = np.zeros_like(self.T)
 
         if mix == 'DIB':
             mixing_coefs = self.c_mix_DIB
@@ -176,8 +180,9 @@ class PlumeModel:
         print(f'RUNNING {mix} PLUME COMPUTATION')
         plume_lifting(self.T, self.q, self.temp_v_plume, self.temp_plume, 
                       self.q_plume, self.ql_plume, self.qi_plume, self.q_rain,
+                      self.phi_plume, 
                       mixing_coefs, self.lev, self.ind_launch, self.conserved, 
-                      self.rain_out, self.micro, self.C0)
+                      self.rain_out, self.micro, self.C0, self.qsat_opt)
         
         self.mix_opt = mix
 
@@ -210,6 +215,7 @@ class PlumeModel:
         self.ql_plume[nan_idx] = np.nan
         self.qi_plume[nan_idx] = np.nan
         self.q_rain[nan_idx] = np.nan
+        self.phi_plume[nan_idx] = np.nan
 
         thetae_env = theta_e_calc(self.lev, self.T, self.q, 0.0)
         thetae_sat_env = theta_e_calc(self.lev, self.T, qsat_env, 0.0)
@@ -228,7 +234,8 @@ class PlumeModel:
                          q_plume = (("time", "lev"), self.q_plume),
                          ql_plume = (("time", "lev"), self.ql_plume),
                          qi_plume = (("time", "lev"), self.qi_plume),
-                         q_rain = (("time", "lev"), self.q_rain)    
+                         q_rain = (("time", "lev"), self.q_rain),
+                         phi_plume = (("time", "lev"), self.phi_plume)    
                          )
         coords = dict(time = self.time, lev = self.lev)
 
@@ -261,7 +268,7 @@ class JPPlume(PlumeModel):
 
     def __init__(self, fils, preprocess, output_dir, output_file_name, mix_opt='DIB', 
                  interpolate=True, launch_opt='surface', launch_level=1000, DIB_mix_upper=450, rain_out=0.001, 
-                 conserved=1, microphysics=1, C0=0.1, fracent = 0., prate = 0., T1 = 273.15, T2 = 233.15):
+                 conserved=1, microphysics=1, C0=0.1, qsat_opt = None, fracent = 0., prate = 0., T1 = 273.15, T2 = 233.15):
         
         super().__init__(fils, preprocess, output_dir, output_file_name, mix_opt, interpolate, launch_opt, 
                          launch_level, DIB_mix_upper, rain_out, conserved, microphysics, C0)
@@ -313,6 +320,7 @@ class JPPlume(PlumeModel):
         self.temp_plume, self.temp_v_plume = np.full_like(self.T, np.nan), np.full_like(self.T, np.nan)
         self.q_plume, self.ql_plume, self.qi_plume = np.full_like(self.T, np.nan), np.full_like(self.T, np.nan), np.full_like(self.T, np.nan)
         self.qt_plume, self.q_rain = np.full_like(self.T, np.nan), np.full_like(self.T, np.nan)  # raining hydrometeors
+        self.phi_plume  = np.full_like(self.T, np.nan)
 
         # initialize plume variables
         if self.ind_launch[0] > 0:
@@ -339,13 +347,14 @@ class JPPlume(PlumeModel):
         descriminator function between liquid and ice (i.e., omega defined in the
         beginning of section 2e in Peters et al. 2022)
         """
-        return ((T - T1)/(T2-T1))*np.heaviside((T - T1)/(T2-T1),1)*np.heaviside((1 - (T - T1)/(T2-T1)),1) + np.heaviside(-(1 - (T - T1)/(T2-T1)),1);
+        return ( (T - T1)/(T2 - T1) ) * np.heaviside((T - T1)/(T2 - T1), 1) * np.heaviside((1 - (T - T1)/(T2 - T1)), 1) + np.heaviside(-(1 - (T - T1)/(T2-T1)),1)
+    
     @staticmethod
     def domega(T,T1,T2):
         return (np.heaviside(T1-T,1) - np.heaviside(T2-T,1))/(T2-T1)
 
 
-    def __compute_rsat(self, T, p, iceflag):
+    def  compute_rsat(self, T, p, iceflag):
         #FUNCTION THAT CALCULATES THE SATURATION MIXING RATIO    
         #THIS FUNCTION COMPUTES THE SATURATION MIXING RATIO, USING THE INTEGRATED
         #CLAUSIUS CLAPEYRON EQUATION (eq. 7-12 in Peters et al. 2022).
@@ -428,6 +437,8 @@ class JPPlume(PlumeModel):
         xlv, xls = const['xlv'], const['xls']
         g, ttrip = const['g'], const['ttrip']
         Rd, Rv, epsilon = const['Rd'], const['Rv'], const['epsilon']
+
+        qvv = qvv / (1 - qt)  # FA
     
         qt = max(qt, 0.0)
         qv = max(qv, 0.0)
@@ -436,6 +447,7 @@ class JPPlume(PlumeModel):
         dOMEGA = self.domega(T, T1, T2)
         
         cpm = (1 - qt) * cp + qv * cpv + (1 - OMEGA) * ( qt - qv ) * cpl + OMEGA * ( qt - qv ) * cpi
+
         Lv = xlv + ( T - ttrip ) * (cpv - cpl)
         Li = ( xls - xlv ) + ( T - ttrip ) * ( cpl - cpi )
         Rm0 = (1 - q0) * Rd + q0 * Rv
@@ -449,12 +461,14 @@ class JPPlume(PlumeModel):
         Q_M = (1 - OMEGA) * qvv / (1 - Qvsl) + OMEGA * qvi / (1 - Qvsi)
         L_M = Lv * (1 - OMEGA) * qvv / (1 - Qvsl) + (Lv + Li) * OMEGA * qvi / (1 - Qvsi)
 
+
         eps_T =  -fracent * (T - T0)
         eps_qv = -fracent * (qv - q0)
         eps_qt = -fracent * (qt - q0) - prate * (qt-qv)
         term1 = -B
         
         term2 = - Q_M * (Lv + Li * OMEGA ) * g / ( Rm0 * T0 )
+
         
         term3 = -g
         term4 = (cpm - Li * (qt - qv) * dOMEGA) * eps_T
@@ -463,7 +477,17 @@ class JPPlume(PlumeModel):
         term6 = cpm
         term7 = -Li * (qt - qv) * dOMEGA
         term8 = ( Lv + Li * OMEGA ) * ( -dOMEGA * (qvv - qvi) + L_M/(Rv * pow(T,2)) )
+
         gamma_m =( term1 + term2 + term3 + term4 + term5) / (term6 + term7 + term8)
+
+        # cpm_mod = cp + qv * cpv + ( qt - qv ) * cpl 
+        # Q_M_mod = qvv # / (1 - Qvsl) 
+        # L_M_mod = Lv * qvv #/ (1 - Qvsl) #+ (Lv + Li) * OMEGA * qvi / (1 - Qvsi)
+        # term2_mod = - qvv * (Lv ) * g / ( Rv * T )
+        # term6_mod = cpm_mod
+        # term8_mod = ( Lv ) * ( L_M_mod /(Rv * pow(T,2)) )
+        # # gamma_m = ( term2_mod + term3 ) / (term6_mod +  term8_mod)
+        
         return gamma_m
 
     def compute_moist_lapse_rate(self, T_plume, q_plume, qt_plume, T_env, Q0_env, p, fracent, prate):
@@ -471,8 +495,8 @@ class JPPlume(PlumeModel):
         Wrapper to compute moist lapse rate
         """
         # moistlift(T, qv, qvv, qvi, T0, q0, qt, fracent, prate):
-        qvv = (1 - qt_plume) * self.__compute_rsat(T_plume, p, 0)
-        qvi = (1 - qt_plume) * self.__compute_rsat(T_plume, p, 2)
+        qvv = (1 - qt_plume) * self. compute_rsat(T_plume, p, 0)
+        qvi = (1 - qt_plume) * self. compute_rsat(T_plume, p, 2)
         return self.moistlift(T_plume, q_plume, qvv, qvi, qt_plume, T_env, Q0_env, fracent, prate)
 
     def lift_parcel_adiabatic(self, fracent, prate):
@@ -501,11 +525,9 @@ class JPPlume(PlumeModel):
             while (iz < iend) and ( (iz < self.mn_hgt[it])  or  (B_run + 250  > 0) ):
 
                 iz = iz + 1
-                rsat = self.__compute_rsat(self.temp_plume[it, iz-1], self.lev[iz-1], iceflag)
-
+                rsat = self. compute_rsat(self.temp_plume[it, iz-1], self.lev[iz-1], iceflag)
                 q_sat = ( 1 - self.qt_plume[it, iz-1] ) * rsat
                 delta_z = self.z[it, iz] - self.z[it, iz-1]
-
 
                 if self.q_plume[it, iz-1] < q_sat: #if we are unsaturated, go up at the unsaturated adiabatic lapse rate (eq. 19 in Peters et al. 2022)
 
@@ -521,7 +543,7 @@ class JPPlume(PlumeModel):
                     self.temp_plume[it, iz] = self.temp_plume[it, iz-1] + delta_z * dry_lapse_rate
                     self.q_plume[it, iz] = self.q_plume[it, iz-1] - delta_z * fracent * ( self.q_plume[it, iz-1] - self.q[it, iz-1] )
                     self.qt_plume[it, iz] = self.q_plume[it, iz]
-                    q_sat = (1 - self.qt_plume[it, iz]) * self.__compute_rsat(self.temp_plume[it, iz], self.lev[iz], iceflag)
+                    q_sat = (1 - self.qt_plume[it, iz]) * self. compute_rsat(self.temp_plume[it, iz], self.lev[iz], iceflag)
 
                     if self.q_plume[it, iz] >= q_sat: #if we hit saturation, split the vertical step into two stages.  The first stage advances at the saturated lapse rate to the saturation point, and the second stage completes the grid step at the moist lapse rate
 
@@ -546,7 +568,7 @@ class JPPlume(PlumeModel):
                         self.temp_plume[it, iz] = T_halfstep + dz_wet * moist_lr
                 
                         self.qt_plume[it, iz] = self.qt_plume[it, iz-1] -  delta_z * fracent * ( Qt_halfstep - Q0_halfstep )
-                        self.q_plume[it, iz] = ( 1 - self.qt_plume[it,iz] ) * self.__compute_rsat(self.temp_plume[it, iz], self.lev[iz], 1)
+                        self.q_plume[it, iz] = ( 1 - self.qt_plume[it,iz] ) * self. compute_rsat(self.temp_plume[it, iz], self.lev[iz], 1)
 
                         if self.qt_plume[it, iz] < self.q_plume[it, iz]:
                             self.q_plume[it, iz] = self.qt_plume[it, iz]
@@ -561,12 +583,14 @@ class JPPlume(PlumeModel):
                     self.temp_plume[it, iz] = self.temp_plume[it, iz-1] + delta_z * moist_lr
                              
                     self.qt_plume[it, iz] = self.qt_plume[it, iz-1] - delta_z * (fracent * ( self.qt_plume[it, iz-1] - self.q[it, iz-1] )  + prate * ( self.qt_plume[it, iz-1] - self.q_plume[it, iz-1]) )
-                    self.q_plume[it, iz] = ( 1 - self.qt_plume[it, iz] ) * self.__compute_rsat(self.temp_plume[it, iz], self.lev[iz], 1)
+                    self.q_plume[it, iz] = ( 1 - self.qt_plume[it, iz] ) * self. compute_rsat(self.temp_plume[it, iz], self.lev[iz], 1)
 
                     if self.qt_plume[it, iz] < self.q_plume[it, iz]:
                         self.q_plume[it, iz] = self.qt_plume[it, iz]
 
-
+                omega = self.omega(self.temp_plume[it, iz], T1, T2)
+                self.qi_plume[it, iz] = (self.qt_plume[it, iz] - self.q_plume[it, iz]) * omega
+                self.ql_plume[it, iz] = (self.qt_plume[it, iz] - self.q_plume[it, iz] - self.qi_plume[it, iz])
                 num = 1 + (Rv/Rd) * self.q_plume[it, iz] - self.qt_plume[it, iz]
                 den = 1 + self.q[it, iz] * (Rv - Rd) / Rd
                 B_run = B_run + g *  ( ( self.temp_plume[it, iz] / self.T[it, iz] ) * (num / den) - 1 ) * delta_z
@@ -582,3 +606,295 @@ class JPPlume(PlumeModel):
             self.lift_parcel_adiabatic(self.fracent, self.prate)
             self.postprocess_save()
     
+
+class TestInversion(JPPlume):
+    
+
+    def __init__(self, fils, preprocess, output_dir, output_file_name, mix_opt='DIB', interpolate=True, launch_opt='surface', launch_level=1000, DIB_mix_upper=450, rain_out=0.001, 
+                 conserved=1, microphysics=1, C0=0.1, qsat_opt = None, fracent=0, prate=0, T1=273.15, T2=233.15):
+        super().__init__(fils, preprocess, output_dir, output_file_name, mix_opt, interpolate, launch_opt, launch_level, DIB_mix_upper, rain_out, conserved, microphysics, C0, fracent, prate, T1, T2)
+
+    # def __init__(self, fils, preprocess, output_dir, output_file_name, mix_opt='DIB', interpolate=True, launch_opt='surface', launch_level=1000, DIB_mix_upper=450, rain_out=0.001, conserved=1, microphysics=1, C0=0.1):
+    #     super().__init__(fils, preprocess, output_dir, output_file_name, mix_opt, interpolate, launch_opt, launch_level, DIB_mix_upper, rain_out, conserved, microphysics, C0)
+
+        super().prepare_jp_plume()
+
+    def theta_il_calc(self, press_hPa, temp, q, ql, qi):
+
+        pref = 100000.
+        tmelt  = 273.15
+        CPD=1005.7
+        CPV=1870.0
+        CI=2106.0
+        CPVMCL=2320.0
+        RV=461.5
+        RD=287.04
+        EPS=RD/RV
+        ALV0=2.501E6
+        LS0=2.834E6
+
+        press = press_hPa * 100. 
+        tempc = temp - tmelt 
+
+        r = q / (1. - q - ql - qi)
+        rl =  ql / (1. - q - ql - qi)
+        ri =  qi / (1. - q - ql - qi)
+        rt = r + rl + ri
+
+        ALV = ALV0 - (CPVMCL * tempc)    
+        LS = LS0 + (CPV - CI) * tempc
+
+        CPDV = CPD + rt * CPV
+
+        chi = (RD + rt * RV) / CPDV
+        gam = (rt * RV) / CPDV
+
+        # saturation vapor pressures
+        e = r * press /(EPS + r)
+        qsl = super().compute_rsat(temp, press_hPa, 0) * (1 - ql - qi - q)
+        qsi = super().compute_rsat(temp, press_hPa, 2) * (1 - ql - qi - q)
+        Hl = q/qsl
+        Hi = q/qsi
+        # Hl = e/self.es_calc(temp)
+        # Hi = e/self.esi_calc(temp)
+
+        exponent = (-ALV*rl - LS*ri)/(CPDV * temp) + (RV/CPDV) * (rl * np.log(Hl) +  ri * np.log(Hi))
+
+        # eq. (25) of Bryan and Fritsch, 2004.
+        theta_il = temp * pow(pref / press, chi) * pow(1. - (rl + ri)/(EPS + rt), chi) * pow(1. - (rl + ri)/rt, -gam) * np.exp(exponent)
+        return theta_il
+
+    @staticmethod
+    def es_calc(temp):
+
+        ttrip  = 273.15
+        cpv = 1870
+        cpl = 4190
+        Rv = 461.5
+        xlv = 2501000.0
+        eref = 611.2
+
+        term1 = ( cpv - cpl )/Rv
+        term2 = ( xlv - ttrip * (cpv - cpl) )/Rv
+        esl = 1e-2 * np.exp( (temp - ttrip) * term2 / (temp * ttrip) ) * eref * pow( temp / ttrip, term1)
+
+        return esl
+
+    @staticmethod
+    def esi_calc(temp):
+
+        ttrip  = 273.15
+        cpv = 1870
+        Rv = 461.5
+        eref = 611.2
+        xls = 2834000.0
+        cpi = 2106.0
+
+        term1 = (cpv - cpi) / Rv
+        term2 = ( xls - ttrip * (cpv - cpi)) / Rv
+
+        esi = 1e-2 * np.exp( (temp - ttrip) * term2/(temp * ttrip)) * eref * pow(temp/ttrip, term1)
+
+        return esi
+    
+    def compute_qsat_jp(self, T, p, iceflag):
+        #FUNCTION THAT CALCULATES THE SATURATION MIXING RATIO    
+        #THIS FUNCTION COMPUTES THE SATURATION MIXING RATIO, USING THE INTEGRATED
+        #CLAUSIUS CLAPEYRON EQUATION (eq. 7-12 in Peters et al. 2022).
+        #https://doi-org.ezaccess.libraries.psu.edu/10.1175/JAS-D-21-0118.1 
+
+        #input arguments
+        #T temperature (in K)
+        #p pressure (in hPa)
+        #iceflag (give mixing ratio with respect to liquid (0), combo liquid and
+        #ice (2), or ice (3)
+        #T1 warmest mixed-phase temperature
+        #T2 coldest mixed-phase temperature
+        
+        #NOTE: most of my scripts and functions that use this function need
+        #saturation mass fraction qs, not saturation mixing ratio rs.  To get
+        #qs from rs, use the formula qs = (1 - qt)*rs, where qt is the total
+        #water mass fraction
+
+        #CONSTANTS
+        const = self.const
+        p = p * 100 #convert pressure to Pa
+
+        T1, T2 = self.T1, self.T2
+        omeg = self.omega(T, T1, T2)
+        Rv = const['Rv']
+        cpv, cpl, cpi = const['cpv'], const['cpl'], const['cpi']
+        xlv, xls = const['xlv'], const['xls']
+        ttrip = const['ttrip']
+        eref = const['eref']
+        epsilon = const['epsilon']
+
+        if iceflag == 0:
+
+            term1 = ( cpv - cpl )/Rv
+            term2 = ( xlv - ttrip * (cpv - cpl) )/Rv
+            esl = np.exp( (T - ttrip) * term2 / (T * ttrip)) * eref * pow(T/ttrip, term1)
+            rsat = epsilon * esl / (p - esl)
+
+        elif iceflag == 1: #give linear combination of mixing ratio with respect to liquid and ice (eq. 20 in Peters et al. 2022)
+
+            term1 = (cpv - cpl)/Rv
+            term2 = ( xlv - ttrip*(cpv-cpl) ) / Rv
+            esl_l = np.exp( ( T - ttrip ) * term2/( T * ttrip )) * eref * pow( T/ttrip, term1)
+            qsat_l = epsilon * esl_l/(p - esl_l)
+            term1 = (cpv - cpi) / Rv
+            term2 = ( xls - ttrip * (cpv - cpi)) / Rv
+            esl_i = np.exp( (T - ttrip) * term2/(T * ttrip)) * eref * pow(T/ttrip, term1)
+            qsat_i = epsilon * esl_i / ( p - esl_i )
+            rsat = ( 1 - omeg ) * qsat_l + omeg * qsat_i
+
+        elif iceflag == 2: #only give mixing ratio with respect to ice
+            term1 = ( cpv - cpi ) / Rv
+            term2=( xls - ttrip * ( cpv - cpi )) / Rv
+            esl = np.exp( (T - ttrip ) * term2/(T * ttrip) )* eref * pow(T/ttrip, term1)
+            esl = min( esl , p * 0.5 )
+            rsat = epsilon * esl/(p-esl)
+
+        return rsat
+
+    
+    def qs_calc(self, press_hPa, temp):
+
+        tmelt  = 273.15
+        RV=461.5
+        RD=287.04
+
+        EPS = RD/RV
+
+        press = press_hPa * 100. 
+
+        es = self.es_calc(temp) 
+        es = es * 100. # convert to Pa from hPa
+        qs = (EPS * es) / (press + ((EPS-1.)*es))
+        return qs
+
+    def qsi_calc(self, press_hPa, temp):
+
+        tmelt  = 273.15
+        RV=461.5
+        RD=287.04
+        
+        EPS=RD/RV
+        press = press_hPa * 100
+        esi = self.esi_calc(temp) 
+        esi = esi * 100. #convert to Pa from hPa
+        qsi = (EPS * esi) / (press + ((EPS-1.)*esi))
+        return qsi
+
+
+    def microphysics2(self, press_hPa, temp_plume, qt):
+
+        """
+        Microphysics scheme 2: supersaturation wrt water allowed between 0C to -40C. All condensed water is in the form of liquid above 0C and ice below -40C.
+        In the mixed-phase region (-40C to 0C), the fraction of ice and water is specified by a temperature-dependent function Fi.
+        Following Bryan and Fritsch 2004, MWR. 
+
+        Input Arguments
+        ---------------
+        pressure (hPa), temperature (K), total water content (vapor + liquid + ice) (kg/kg), freeze flag (0 or 1)
+
+        Returns
+        -------
+        q: vapor mixing ratio (kg/kg)
+        ql: liquid water mixing ratio (kg/kg)
+        qi: ice mixing ratio (kg/kg)
+        qt: total water content (kg/kg)
+
+        Reference
+        ---------
+            Bryan, G. H., & Fritsch, J. M. (2004). A reevaluation of ice–liquid water potential temperature. Monthly weather review, 132(10), 2421-2431.
+        """
+
+    
+        if temp_plume > 273.15:  # above freezing
+
+            qi_plume = 0.0
+            qsw = qs_calc(press_hPa, temp_plume) # get saturation sp. humidity wrt water
+
+            if qt < qsw:
+                q_plume = qt
+                ql_plume = 0.0
+            else:
+                q_plume = qsw                               
+                ql_plume = qt - q_plume  # plume liq. water
+
+
+        elif temp_plume <= 273.15 and temp_plume >= 233.15:  # mixed-phase region
+
+            qsw = self.qs_calc(press_hPa, temp_plume) # get saturation sp. humidity wrt water
+            qsi = self.qsi_calc(press_hPa, temp_plume)
+
+            Fi = (273.15 - temp_plume)/(273.15 - 233.15)  # fraction of ice in the mixed-phase region
+
+            if qt < qsi:   # unsaturated wrt ice and water
+                q_plume = qt
+                qi_plume = 0.0
+                ql_plume = 0.0
+            
+            elif qt > qsi and qt < qsw: # saturated wrt ice, unsaturated wrt water
+                q_plume = qsi
+                qi_plume = qt - q_plume
+                ql_plume = 0.0
+
+            elif qt > qsw:  # saturated wrt both ice and water
+                q_plume = Fi * qsi + (1 - Fi) * qsw
+                qi_plume = Fi * (qt - q_plume)
+                ql_plume = qt - q_plume - qi_plume
+
+        elif temp_plume < 233.15:  # below -40C
+
+            ql_plume = 0.0
+            qsi = self.qsi_calc(press_hPa, temp_plume)
+
+            if qt < qsi:
+                q_plume = qt
+                qi_plume = 0.0
+            else:
+                q_plume = qsi
+                qi_plume = qt - q_plume
+
+        qt_plume = q_plume + ql_plume + qi_plume
+
+        return q_plume, ql_plume, qi_plume, qt_plume
+
+
+    def phi_temp(self, press_hPa, temp_plume, qt):
+        q, ql, qi, qt_out = self.microphysics2(press_hPa, temp_plume, qt)
+        phi = self.theta_il_calc(press_hPa, temp_plume, q, ql, qi)
+        return phi, q, ql, qi, qt_out
+
+    def invert_phi(self, press_hPa, phi_target, qt, T0):
+
+        pref = 100000.
+        CPD = 1005.7
+        CPV = 1870.0
+        RD = 287.04
+        RV = 461.5
+        ALV0=2.501E6
+        deltaT = 999.0
+        press = press_hPa * 100. 
+        rt = qt/(1-qt)
+        chi = (RD + (rt * RV)) / (CPD + (rt * CPV))
+
+        T1 = T0 + 2.0  # add 2 K for the second guess
+
+        while abs(deltaT) >= 1e-4:  # convergence criterion
+            
+            phi1, q, ql, qi, qt_new = self.phi_temp(press_hPa, T1, qt) # f[x1, y(x1), ...]
+            phi0, *_ = self.phi_temp(press_hPa, T0, qt) # f[x0, y(x0), ...]
+
+            fx = phi1 - phi_target  # f[x, y(x), ...] - f0 # minimize this
+            dfx = (phi1 - phi0)/(T1 - T0) # f'[x, y(x), ...]
+            deltaT = fx / dfx
+            T0 = T1
+            T1 = T1 - deltaT  # update x1
+
+        phi_new, q, ql, qi, qt_new = self.phi_temp(press_hPa, T1, qt)
+        # print(f'Error:{abs(phi_new - phi_target)}')
+
+        return T1, q, ql, qi
