@@ -982,7 +982,7 @@ def plume_lifting(np.ndarray[DTYPE_t, ndim=2] temp_env,
 
             # Mix the ice-liquid potential temperature and total water
             if c_mix[j,i-1] > 0:
-                phi_plume[j, i] = phi_plume[i-1] * (1. - c_mix[j,i-1]) + phi_env[i-1] * c_mix[j,i-1]
+                phi_plume[j, i] = phi_plume[j, i-1] * (1. - c_mix[j,i-1]) + phi_env[i-1] * c_mix[j,i-1]
                 qt_plume[i] = (qt_plume[i-1] * (1. - c_mix[j,i-1])) + (q_env[j,i-1] * c_mix[j,i-1])
             else:                
                 phi_plume[j, i] = phi_plume[j, i-1]
