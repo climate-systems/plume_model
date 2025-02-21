@@ -160,6 +160,7 @@ class PlumeModel:
         self.c_mix_DIB[:, iz_upper:] = 0.0
         self.c_mix_DIB[self.c_mix_DIB < 0] = 0.0
         self.c_mix_DIB[np.isinf(self.c_mix_DIB)] = 0.0
+        self.c_mix_DIB[np.isnan(self.c_mix_DIB)] = 0.0
 
         assert (np.ma.masked_invalid(self.c_mix_DIB)>=0).all() & (np.ma.masked_invalid(self.c_mix_DIB)<=1).all(), 'Mixing coeffs. must be between 0 and 1'
 
@@ -193,7 +194,7 @@ class PlumeModel:
         """
 
         qsat_env = qs_calc(self.lev, self.T)
-        Tv_env = temp_v_calc(self.T, self.q, 0.0)
+        Tv_env = temp_v_calc(self.T, self.q, self.q)
         T_env = deepcopy(self.T)
         q_env = deepcopy(self.q)
 
@@ -217,9 +218,9 @@ class PlumeModel:
         self.q_rain[nan_idx] = np.nan
         self.phi_plume[nan_idx] = np.nan
 
-        thetae_env = theta_e_calc(self.lev, self.T, self.q, 0.0)
-        thetae_sat_env = theta_e_calc(self.lev, self.T, qsat_env, 0.0)
-        thetae_plume = theta_e_calc(self.lev, self.temp_plume, self.q_plume, self.ql_plume)
+        thetae_env = theta_e_calc(self.lev, self.T, self.q, 0.0, 0.0)
+        thetae_sat_env = theta_e_calc(self.lev, self.T, qsat_env, 0.0, 0.0)
+        thetae_plume = theta_e_calc(self.lev, self.temp_plume, self.q_plume, self.ql_plume, self.qi_plume)
 
         print('SAVING FILE')
 
@@ -336,7 +337,7 @@ class JPPlume(PlumeModel):
     
 
     def __compute_geopotential_height(self):
-        Tv = temp_v_calc(self.T, self.q, 0.0)  # possibly redundant calc for Tv
+        Tv = temp_v_calc(self.T, self.q, self.q)  # possibly redundant calc for Tv
         integrand = self.const['Rd'] * Tv / self.lev
         dp = abs( np.gradient(self.lev) )
         self.phi = np.nancumsum(integrand * dp, axis = 1, out = integrand)

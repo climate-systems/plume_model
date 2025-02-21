@@ -85,11 +85,6 @@ cdef es_calc(double temp):
     term1 = ( cpv - cpl )/Rv
     term2 = ( xlv - ttrip * (cpv - cpl) )/Rv
     esl = exp( (temp - ttrip) * term2 / (temp * ttrip) ) * eref * pow( temp / ttrip, term1)
-
-    # term1 = ( cpv - cpl )/RV
-    # term2 = ( xlv - ttrip * (cpv - cpl) )/RV
-    # esl = exp( (temp - ttrip) * term2 / (temp * ttrip)) * eref * pow(temp / ttrip, term1)
-
     
     return esl
 

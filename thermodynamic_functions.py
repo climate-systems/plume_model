@@ -43,7 +43,7 @@ def calc_geopotential_height(temp, sphum, press_hPa, vertical_axis = -1):
     """
     Rd = 287.04
     g = 9.81
-    Tv = temp_v_calc(temp, sphum, 0.0)
+    Tv = temp_v_calc(temp, sphum, sphum)
     z = -(Rd/g) * cumulative_trapezoid(y = Tv, x = np.log(press_hPa), axis = vertical_axis, 
                                        initial = 0)
     return z
@@ -66,34 +66,67 @@ def temp_v_calc (temp, q, qt):
     return temp_v
 
 
+# def es_calc(temp):
+
+#     #get some constants:
+#     tmelt  = 273.15
+
+#     #convert inputs to proper units, forms 
+#     tempc = temp - tmelt # in C
+#     tempcorig = tempc
+#     c=np.array((0.6105851e+03,0.4440316e+02,0.1430341e+01,0.2641412e-01,0.2995057e-03,0.2031998e-05,0.6936113e-08,0.2564861e-11,-.3704404e-13))
+
+#     #calc. es in hPa (!!!)
+#     #es = 6.112*EXP(17.67*tempc/(243.5+tempc))
+#     es=c[0]+tempc*(c[1]+tempc*(c[2]+tempc*(c[3]+tempc*(c[4]+tempc*(c[5]+tempc*(c[6]+tempc*(c[7]+tempc*c[8])))))))
+#     es = es/100.
+
+# #     ;put in Bolton values for T < -80. C
+# #     junk = check_math(/print) ;;print out any prev. math errors
+#     lowtempc = np.where(tempc<-80)[0]
+# #     es[lowtempc]=es_calc_bolton(temp[lowtempc])
+#     return es
+
 def es_calc(temp):
 
+    ttrip  = 273.15
+    cpv = 1870
+    cpl = 4190
+    Rv = 461.5
+    xlv = 2501000.0
+    eref = 611.2
 
-    #get some constants:
-    tmelt  = 273.15
+    term1 = ( cpv - cpl )/Rv
+    term2 = ( xlv - ttrip * (cpv - cpl) )/Rv
+    esl = np.exp( (temp - ttrip) * term2 / (temp * ttrip) ) * eref * pow( temp / ttrip, term1)
 
-    #convert inputs to proper units, forms 
-    tempc = temp - tmelt # in C
-    tempcorig = tempc
-    c=np.array((0.6105851e+03,0.4440316e+02,0.1430341e+01,0.2641412e-01,0.2995057e-03,0.2031998e-05,0.6936113e-08,0.2564861e-11,-.3704404e-13))
+    return esl
 
-    #calc. es in hPa (!!!)
-    #es = 6.112*EXP(17.67*tempc/(243.5+tempc))
-    es=c[0]+tempc*(c[1]+tempc*(c[2]+tempc*(c[3]+tempc*(c[4]+tempc*(c[5]+tempc*(c[6]+tempc*(c[7]+tempc*c[8])))))))
-    es = es/100.
+# def esi_calc(temp):
 
-#     ;put in Bolton values for T < -80. C
-#     junk = check_math(/print) ;;print out any prev. math errors
-    lowtempc = np.where(tempc<-80)[0]
-#     es[lowtempc]=es_calc_bolton(temp[lowtempc])
-    return es
+#     #get some constants:
+#     #calc. es
+#     esi = np.exp(23.33086 - (6111.72784/temp) + (0.15215 * np.log(temp)))
+#     return esi
 
 def esi_calc(temp):
 
-    #get some constants:
-    #calc. es
-    esi = np.exp(23.33086 - (6111.72784/temp) + (0.15215 * np.log(temp)))
+    ttrip  = 273.15
+    cpv = 1870
+    cpl = 4190
+    Rv = 461.5
+    xlv = 2501000.0
+    eref = 611.2
+    xls = 2834000.0
+    cpi = 2106.0
+
+    term1 = (cpv - cpi) / Rv
+    term2 = ( xls - ttrip * (cpv - cpi)) / Rv
+
+    esi = np.exp( (temp - ttrip) * term2/(temp * ttrip)) * eref * pow(temp/ttrip, term1)
+
     return esi
+
 
 
 def es_calc_bolton(temp):
@@ -145,7 +178,7 @@ def qs_calc(press_hPa, temp):
     tempc = temp - tmelt # in C
 
     #get es in Pa
-    es = es_calc(temp) * 100.
+    es = es_calc(temp) #* 100.
 
     #calc. qs in kg/kg
     qs = (EPS * es) / (press + ((EPS-1.)*es))
@@ -241,46 +274,107 @@ def theta_il_calc(press_hPa, temp, q, ql, qi):
     return theta_il
 
 
-def theta_e_calc (press_hPa, temp, q, ql):
+# def theta_e_calc (press_hPa, temp, q, ql):
 
-    #get some constants:
+#     #get some constants:
+#     pref = 100000.
+#     tmelt  = 273.15
+#     CPD = 1005.7
+#     CPV = 1870.0
+#     CPVMCL = 2320.0
+#     RV = 461.5
+#     RD = 287.04
+#     EPS = RD/RV
+#     ALV0 = 2.501E6
+#     CL = 4184.0
+
+
+#     #convert inputs to proper units, forms 
+#     press = press_hPa * 100. # in Pa
+#     tempc = temp - tmelt # in C
+#     r = q / (1. -q -ql)
+#     rt = (q + ql)/ (1. - q - ql)
+
+#     # get ev in hPa 
+#     ev_hPa = press_hPa * r / (EPS + r)
+#     H = ev_hPa * 1e2/es_calc(temp) # relative humidity
+#     ALV = ALV0 - CPVMCL * tempc  # Latent heat of vaporization
+
+#     #get TL
+#     TL = (2840. / ((3.5*np.log(temp)) - (np.log(ev_hPa)) - 4.805)) + 55.
+
+#     #calc chi_e:
+#     # chi_e = 0.2854 * (1. - (0.28*r))
+#     chi_e = RD/(CPD + (rt * CL))
+
+#     # theta_e = temp * (pref / press)**chi_e * np.exp(((3.376/TL) - 0.00254) * r * 1000. * (1. + (0.81 * r)))
+#     theta_e = temp * pow((pref / press), chi_e) * np.exp( ALV * r / ((CPD + rt * CL) * temp)) * pow(H, -r * RV/ (CPD + (rt * CL))) 
+
+#     return theta_e
+
+
+def theta_e_calc (press_hPa, temp, q, ql, qi):
+
+    """
+    Function from Todd Emmenegger
+
+    Compute equivalent potential temperature (thetae) following  Eq. (2.67) in Stevens & Siebesma (2020)
+    which, with ice correction, is equivalent to Eq. (4.5.11) in Emanuel (1994).
+ 
+    Input Arguments
+    ---------------
+    pressure (hPa), temperature (K), specific humidity q (kg/kg) and specific liquid water ql (kg/kg) 
+
+    Returns
+    -------
+    Equivalent potential temperature thetae (K)
+
+    Reference
+    ---------
+        Emanuel, K. A. (1994). Atmospheric convection. Oxford University Press, USA.
+
+    """
+
     pref = 100000.
-    tmelt  = 273.15
-    CPD = 1005.7
-    CPV = 1870.0
-    CPVMCL = 2320.0
-    RV = 461.5
-    RD = 287.04
-    EPS = RD/RV
-    ALV0 = 2.501E6
+    tmelt  = 273.1636783445389; # Triple point = freezing point
+    CPD=1005.7
+    CPV=1870.0
+    CPVMCL=2320.0
     CL = 4184.0
-
-
-    #convert inputs to proper units, forms 
+    RV=461.5
+    RD=287.04
+    EPS=RD/RV
+    ALV0=2.501E6
+    LF = 0.3337E6 # latent heat of fusion at 0-deg-C (lv0-ls)
+    
     press = press_hPa * 100. # in Pa
     tempc = temp - tmelt # in C
-    r = q / (1. -q -ql)
-    rt = (q + ql)/ (1. - q - ql)
 
-    # get ev in hPa 
-    ev_hPa = press_hPa * r / (EPS + r)
-    H = ev_hPa * 1e2/es_calc(temp) # relative humidity
-    ALV = ALV0 - CPVMCL * tempc  # Latent heat of vaporization
+    ci = 2106. + 7.3 * tempc
+    ALV = ALV0 - CPVMCL * tempc
 
-    #get TL
-    TL = (2840. / ((3.5*np.log(temp)) - (np.log(ev_hPa)) - 4.805)) + 55.
+    qt = q + ql + qi
+    r = q / (1. - q - ql - qi)
 
-    #calc chi_e:
-    # chi_e = 0.2854 * (1. - (0.28*r))
-    chi_e = RD/(CPD + (rt * CL))
+    # vapor pressures
+    e = r * press /(EPS + r)
+    es = np.zeros_like(temp)
 
-    # theta_e = temp * (pref / press)**chi_e * np.exp(((3.376/TL) - 0.00254) * r * 1000. * (1. + (0.81 * r)))
-    theta_e = temp * pow((pref / press), chi_e) * np.exp( ALV * r / ((CPD + rt * CL) * temp)) * pow(H, -r * RV/ (CPD + (rt * CL))) 
+    es[temp >= tmelt] = es_calc(temp[temp >= tmelt])
+    es[temp < tmelt] = esi_calc(temp[temp < tmelt])
 
+    RE = ( 1 - qt ) * RD
+    R = RE + q * RV
+
+    CPL = CPD + qt * ( CL - CPD)
+
+    chi = RE / CPL
+    gamma = RV * q / CPL
+    gammi = ( CL - ci ) * qi / CPL
+
+    exponent = ( q * ALV / temp - LF * qi / tmelt ) / CPL
+    theta_e = temp * pow( pref * R / (press * RE), chi) * pow(es/e, gamma) * pow(tmelt / temp, gammi) * np.exp( exponent )
     return theta_e
-
-
-   
 
 
 def theta_calc(press_hPa, temp):
